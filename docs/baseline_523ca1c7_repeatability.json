@@ -1,0 +1,14 @@
+{
+  "protocol": {
+    "warmup": 10,
+    "iters": 100,
+    "timing": "true per-iteration timed loop (FLYDSL_PERF_DIST); aiter e2e rotated-avg median + per-iter p95",
+    "band": "max(2%,2us)"
+  },
+  "n_shared": 40,
+  "kernel_path_unstable": 11,
+  "kernel_path_worst_drift_pct": 4.6,
+  "e2e_unstable": 8,
+  "e2e_worst_drift_pct": 7.0,
+  "note": "a4w4 validated 40-pt baseline, two independent sweeps under the truthful timed-loop protocol. e2e is a guardrail; its per-iter p95 path is noisier than kernel-path."
+}

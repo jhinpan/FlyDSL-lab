@@ -91,10 +91,42 @@ def main(argv=None) -> int:
     # internal warmup=2/iters=5 are overridden with the locked values.
     _orig_run_perftest = mod.run_perftest
 
+    # True timed-loop e2e distribution: after a warmup, time the fused_moe call per
+    # iteration (median + p95 over `iters`) IN ADDITION TO aiter's own rotated
+    # average.  We keep aiter's rotated average as the median e2e_us (it defeats L2
+    # via arg rotation, matching the L2-flush intent and staying comparable across
+    # runs) and use the per-iteration loop only for the e2e p95 dispersion.
+    e2e_dist = {"median": None, "p95": None}
+    # run_perftest's own control kwargs are NOT forwarded to the timed callable.
+    _PERF_CTRL_KW = ("num_iters", "num_warmup", "testGraph", "num_rotate_args", "needTrace")
+
     def _locked_run_perftest(func, *a, **kw):
-        kw["num_iters"] = args.iters
-        kw["num_warmup"] = args.warmup
-        return _orig_run_perftest(func, *a, **kw)
+        # aiter's rotated average (locked warmup/iters) -> the comparable median.
+        kw_avg = dict(kw)
+        kw_avg["num_iters"] = args.iters
+        kw_avg["num_warmup"] = args.warmup
+        data, avg = _orig_run_perftest(func, *a, **kw_avg)
+        e2e_dist["median"] = avg
+        # Per-iteration p95 dispersion (best-effort; does not change the median).
+        try:
+            import torch
+
+            call_kw = {k: v for k, v in kw.items() if k not in _PERF_CTRL_KW}
+            lat = []
+            ev0 = torch.cuda.Event(enable_timing=True)
+            ev1 = torch.cuda.Event(enable_timing=True)
+            for _ in range(max(1, args.iters)):
+                ev0.record()
+                func(*a, **call_kw)
+                ev1.record()
+                ev1.synchronize()
+                lat.append(ev0.elapsed_time(ev1) * 1000.0)  # ms -> us
+            ordered = sorted(lat)
+            idx = max(0, min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1)))))
+            e2e_dist["p95"] = ordered[idx]
+        except Exception:
+            e2e_dist["p95"] = None
+        return data, avg
 
     mod.run_perftest = _locked_run_perftest
 
@@ -129,18 +161,30 @@ def main(argv=None) -> int:
             check_aot_cache=check_aot,
         )
         if ret is None:
-            result.update({"error": "skipped_or_none", "correctness_pass": False})
+            result.update({"error": "skipped_or_none", "error_category": "skipped", "correctness_pass": False})
         else:
             ld = float(ret["logits_diff"])
             result.update(
                 {
-                    "e2e_us": float(ret["us"]),
+                    "e2e_us": e2e_dist["median"] if e2e_dist["median"] is not None else float(ret["us"]),
+                    "e2e_us_p95": e2e_dist["p95"],
                     "logits_diff": ld,
                     "correctness_pass": ld <= 0.01,
+                    "error_category": "" if ld <= 0.01 else "correctness",
                 }
             )
     except Exception as e:  # AOT miss, strict assertion, or runtime error.
-        result.update({"error": f"{type(e).__name__}: {str(e)[:200]}", "correctness_pass": False})
+        name = type(e).__name__
+        msg = str(e)
+        if "AOT cache miss" in msg:
+            cat = "aot_miss"
+        elif name == "AssertionError" or "accuracy check failed" in msg:
+            cat = "correctness"
+        elif "out of memory" in msg.lower() or "OOM" in msg:
+            cat = "oom"
+        else:
+            cat = "runtime"
+        result.update({"error": f"{name}: {msg[:200]}", "error_category": cat, "correctness_pass": False})
     finally:
         mod.run_perftest = _orig_run_perftest
 

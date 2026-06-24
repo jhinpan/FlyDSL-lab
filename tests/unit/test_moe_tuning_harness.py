@@ -185,14 +185,35 @@ def test_aiter_cmd_is_strict_aot_model_correct():
 
 
 def test_parse_strict_aiter_output():
-    ok = 'noise\nSTRICT_RESULT {"e2e_us": 80.7, "logits_diff": 1.0e-05, "correctness_pass": true}\n'
+    ok = (
+        'noise\nSTRICT_RESULT {"e2e_us": 80.7, "e2e_us_p95": 84.0, "logits_diff": 1.0e-05, '
+        '"correctness_pass": true, "check_aot_cache": true, "error_category": ""}\n'
+    )
     r = harness.parse_strict_aiter_output(ok)
-    assert r["e2e_us"] == 80.7 and r["logits_diff"] == 1.0e-05 and r["correctness_pass"] is True
-    fail = 'STRICT_RESULT {"error": "AssertionError: accuracy check failed", "correctness_pass": false}\n'
+    assert r["e2e_us"] == 80.7 and r["e2e_us_p95"] == 84.0 and r["correctness_pass"] is True
+    assert r["aot_status"] == "checked"
+    fail = (
+        'STRICT_RESULT {"error": "AssertionError: accuracy check failed", '
+        '"error_category": "correctness", "correctness_pass": false, "check_aot_cache": false}\n'
+    )
     rf = harness.parse_strict_aiter_output(fail)
     assert rf["correctness_pass"] is False and "AssertionError" in rf["error"]
+    assert rf["error_category"] == "correctness" and rf["aot_status"] == "no_aot"
     miss = harness.parse_strict_aiter_output("no result here")
     assert miss["correctness_pass"] is False and miss["error"] == "no_strict_result"
+
+
+def test_parse_flydsl_stage_p95():
+    stdout = (
+        "FlyDSL MoE stage1[fp4]: 100.0 us, p95=105.0 us 1654.24 TFLOPS(logical, M=144), 4.0 TB/s (x)\n"
+        "FlyDSL MoE stage2 [moe_gemm2] fp4 atomic | 7168x256, ... | 50.0 us, p95=55.0 us 1200.0 TFLOPS, 3.0 TB/s\n"
+    )
+    g = harness.parse_flydsl_stage_us(stdout)
+    assert g["stage1_us"] == 100.0 and g["stage1_p95"] == 105.0
+    assert g["stage2_us"] == 50.0 and g["stage2_p95"] == 55.0
+    # Without the p95 suffix, the p95 fields are None but median us still parses.
+    g2 = harness.parse_flydsl_stage_us("FlyDSL MoE stage1[fp4]: 100.0 us, 1.0 TFLOPS(logical, M=1), 4.0 TB/s (x)\n")
+    assert g2["stage1_us"] == 100.0 and g2["stage1_p95"] is None
 
 
 # --- run-list coverage (full DEC-6 grid from spec) -------------------------

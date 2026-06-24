@@ -85,17 +85,28 @@ CSV_COLUMNS = [
     "e2e_us_p95",
     "logits_diff",
     "correctness_pass",
+    # failure provenance (auditable for quarantined / failing rows)
+    "flydsl_command",
+    "strict_error",
+    "error_category",
+    "aot_status",
 ]
 
 METRIC_FORMULA = (
     "effective_tflops = token*model_dim*inter_dim*3*topk*2 / combined_us / 1e6; mfu = effective_tflops / 4523"
 )
 
-# Print formats from tests/kernels/test_moe_gemm.py:
-#   "FlyDSL MoE stage1[fp4]: 1163.2 us, 1654.24 TFLOPS(logical, M=4608), 0.377 TB/s (...)"
-#   "FlyDSL MoE stage2 [moe_gemm2] fp4 atomic | 7168x2048, ... | 1163.2 us, 1654.24 TFLOPS, 0.377 TB/s"
+# Print formats from tests/kernels/test_moe_gemm.py (the first us is the median;
+# an optional " p95=<v> us" suffix appears when FLYDSL_PERF_DIST is set):
+#   "FlyDSL MoE stage1[fp4]: 1163.2 us, p95=1170.0 us 1654.24 TFLOPS(...), 0.377 TB/s (...)"
+#   "FlyDSL MoE stage2 [moe_gemm2] fp4 atomic | ... | 1163.2 us, p95=1170.0 us 1654.24 TFLOPS, 0.377 TB/s"
 _STAGE1_RE = re.compile(r"FlyDSL MoE stage1\[[^\]]+\]:\s*([0-9.]+)\s*us")
 _STAGE2_RE = re.compile(r"FlyDSL MoE stage2 \[[^\]]+\]\s+\S+\s+(atomic|reduce)\b.*?([0-9.]+)\s*us")
+# Optional per-stage p95 suffix.
+_STAGE1_P95_RE = re.compile(r"FlyDSL MoE stage1\[[^\]]+\]:\s*[0-9.]+\s*us,\s*p95=([0-9.]+)\s*us")
+_STAGE2_P95_RE = re.compile(
+    r"FlyDSL MoE stage2 \[[^\]]+\]\s+\S+\s+(?:atomic|reduce)\b.*?[0-9.]+\s*us,\s*p95=([0-9.]+)\s*us"
+)
 # Optional sorting print, if the FlyDSL benchmark emits one.
 _SORT_RE = re.compile(r"FlyDSL MoE sort(?:ing)?[^\d]*([0-9.]+)\s*us", re.IGNORECASE)
 
@@ -180,6 +191,10 @@ class PointRow:
     e2e_us_p95: Optional[float] = None
     logits_diff: Optional[float] = None
     correctness_pass: Optional[bool] = None
+    flydsl_command: str = ""
+    strict_error: str = ""
+    error_category: str = ""
+    aot_status: str = ""
 
     def to_csv_dict(self) -> dict:
         p = self.provenance
@@ -223,6 +238,10 @@ class PointRow:
             "e2e_us_p95",
             "logits_diff",
             "correctness_pass",
+            "flydsl_command",
+            "strict_error",
+            "error_category",
+            "aot_status",
         ):
             row[k] = getattr(self, k)
         return row
@@ -232,16 +251,22 @@ class PointRow:
 
 
 def parse_flydsl_stage_us(stdout: str) -> dict:
-    """Extract stage1 / stage2 us from FlyDSL test_moe_gemm.py stdout.
+    """Extract stage1 / stage2 median us and optional p95 from FlyDSL stdout.
 
-    Returns ``{"stage1_us": float|None, "stage2_us": float|None}`` using the last
-    matching line for each stage (the benchmarked, post-warmup print).
+    Returns ``{"stage1_us", "stage2_us", "stage1_p95", "stage2_p95"}`` using the
+    last matching line for each stage (the benchmarked, post-warmup print).  The
+    p95 fields are populated only when the FlyDSL benchmark was run with
+    FLYDSL_PERF_DIST (true timed-loop distribution); otherwise None.
     """
     s1 = _STAGE1_RE.findall(stdout)
     s2 = _STAGE2_RE.findall(stdout)
+    s1p = _STAGE1_P95_RE.findall(stdout)
+    s2p = _STAGE2_P95_RE.findall(stdout)
     return {
         "stage1_us": float(s1[-1]) if s1 else None,
         "stage2_us": float(s2[-1][1]) if s2 else None,
+        "stage1_p95": float(s1p[-1]) if s1p else None,
+        "stage2_p95": float(s2p[-1]) if s2p else None,
     }
 
 
@@ -292,17 +317,29 @@ def parse_strict_aiter_output(stdout: str) -> dict:
     for ln in stdout.splitlines():
         if ln.startswith("STRICT_RESULT "):
             line = ln[len("STRICT_RESULT ") :]
+    empty = {
+        "e2e_us": None,
+        "e2e_us_p95": None,
+        "logits_diff": None,
+        "correctness_pass": False,
+        "error": "no_strict_result",
+        "error_category": "no_result",
+        "aot_status": "",
+    }
     if line is None:
-        return {"e2e_us": None, "logits_diff": None, "correctness_pass": False, "error": "no_strict_result"}
+        return empty
     try:
         d = json.loads(line)
     except json.JSONDecodeError:
-        return {"e2e_us": None, "logits_diff": None, "correctness_pass": False, "error": "bad_strict_json"}
+        return {**empty, "error": "bad_strict_json", "error_category": "bad_json"}
     return {
         "e2e_us": d.get("e2e_us"),
+        "e2e_us_p95": d.get("e2e_us_p95"),
         "logits_diff": d.get("logits_diff"),
         "correctness_pass": bool(d.get("correctness_pass")),
         "error": d.get("error", ""),
+        "error_category": d.get("error_category", ""),
+        "aot_status": "checked" if d.get("check_aot_cache") else "no_aot",
     }
 
 
@@ -623,9 +660,11 @@ def _aiter_cmd(rp: RunPoint, check_aot: bool = True) -> List[str]:
     return cmd
 
 
-def _exec(cmd: List[str], gpu_id: str) -> str:
+def _exec(cmd: List[str], gpu_id: str, extra_env: Optional[dict] = None) -> str:
     env = dict(os.environ)
     env["HIP_VISIBLE_DEVICES"] = str(gpu_id)
+    if extra_env:
+        env.update({k: str(v) for k, v in extra_env.items()})
     try:
         out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=3600)
         return (out.stdout or "") + "\n" + (out.stderr or "")
@@ -647,20 +686,24 @@ def run_point(
     combined kernel-path us = stage1 + stage2 + sorting; the aiter run supplies
     the e2e guardrail us, logits_diff, and correctness pass/fail.
 
-    Each FlyDSL/aiter invocation already averages ``iters`` device iterations
-    under the L2-rotation protocol; to obtain the locked median+p95 dispersion we
-    repeat each invocation ``reps`` times and summarize across reps.  Stage1/stage2
-    us are reported as the median across reps; ``kernel_path_us`` /
-    ``kernel_path_us_p95`` and ``e2e_us`` / ``e2e_us_p95`` are the median and p95 of
-    the per-rep combined and e2e samples.
+    Median + p95 come from the TRUE timed loop inside each subprocess: the FlyDSL
+    benchmark runs with ``FLYDSL_PERF_DIST=1`` (per-iteration median+p95 over
+    ``iters``) and the strict aiter runner times fused_moe per iteration.  ``reps``
+    here is just how many independent subprocess samples to take of the median; the
+    per-point p95 is the timed-loop p95 (median of the per-rep p95 values), NOT a
+    dispersion across reps.  ``flydsl_command``, ``strict_error``,
+    ``error_category``, and ``aot_status`` are recorded for auditability.
     """
     flydsl_cmd = _flydsl_cmd(rp, gpu_id, tile)
     aiter_cmd = _aiter_cmd(rp)
     command = " ".join(flydsl_cmd) + " ; " + " ".join(aiter_cmd)
+    # The FlyDSL benchmark must emit its true per-iteration distribution.
+    flydsl_env = {"FLYDSL_PERF_DIST": "1"}
 
     s1_samples, s2_samples, sort_samples, combined_samples = [], [], [], []
+    s1_p95s, s2_p95s = [], []
     for _ in range(max(1, reps)):
-        out = _exec(flydsl_cmd, gpu_id)
+        out = _exec(flydsl_cmd, gpu_id, extra_env=flydsl_env)
         stages = parse_flydsl_stage_us(out)
         if stages["stage1_us"] is None or stages["stage2_us"] is None:
             continue
@@ -669,18 +712,28 @@ def run_point(
         s2_samples.append(stages["stage2_us"])
         sort_samples.append(srt)
         combined_samples.append(combined_kernel_path_us(stages["stage1_us"], stages["stage2_us"], srt))
+        if stages["stage1_p95"] is not None:
+            s1_p95s.append(stages["stage1_p95"])
+        if stages["stage2_p95"] is not None:
+            s2_p95s.append(stages["stage2_p95"])
 
-    e2e_samples, logits_samples, correctness = [], [], None
+    e2e_samples, e2e_p95s, logits_samples, correctness = [], [], [], None
+    strict_error, error_category, aot_status = "", "", ""
     if measure_e2e:
         for _ in range(max(1, reps)):
             res = parse_strict_aiter_output(_exec(aiter_cmd, gpu_id))
             if res["e2e_us"] is not None:
                 e2e_samples.append(res["e2e_us"])
+            if res.get("e2e_us_p95") is not None:
+                e2e_p95s.append(res["e2e_us_p95"])
             if res["logits_diff"] is not None:
                 logits_samples.append(res["logits_diff"])
-            # correctness must hold on EVERY rep.
             rep_ok = res["correctness_pass"]
             correctness = rep_ok if correctness is None else (correctness and bool(rep_ok))
+            # keep the last rep's failure provenance (representative).
+            strict_error = res.get("error", "") or strict_error
+            error_category = res.get("error_category", "") or error_category
+            aot_status = res.get("aot_status", "") or aot_status
 
     row = PointRow(
         provenance=provenance,
@@ -699,23 +752,33 @@ def run_point(
         tile_m2=tile["tile_m1"],
         tile_n2=tile["tile_n2"],
         tile_k2=tile["tile_k2"],
+        flydsl_command=" ".join(flydsl_cmd),
+        strict_error=strict_error,
+        error_category=error_category,
+        aot_status=aot_status,
     )
     if combined_samples:
         row.stage1_us = summarize(s1_samples)["median"]
         row.stage2_us = summarize(s2_samples)["median"]
         row.sorting_us = summarize(sort_samples)["median"]
-        kp = summarize(combined_samples)
-        row.kernel_path_us = kp["median"]
-        row.kernel_path_us_p95 = kp["p95"]
+        row.kernel_path_us = summarize(combined_samples)["median"]
+        # p95 is the timed-loop p95 (median across the per-rep timed-loop p95s);
+        # fall back to the across-rep combined p95 only if the timed-loop p95 is
+        # unavailable.
+        if s1_p95s and s2_p95s:
+            row.kernel_path_us_p95 = (
+                summarize(s1_p95s)["median"] + summarize(s2_p95s)["median"] + summarize(sort_samples)["median"]
+            )
+        else:
+            row.kernel_path_us_p95 = summarize(combined_samples)["p95"]
         m = compute_metrics(
-            token=rp.token, model_dim=rp.model_dim, inter_dim=rp.inter_dim, topk=rp.topk, combined_us=kp["median"]
+            token=rp.token, model_dim=rp.model_dim, inter_dim=rp.inter_dim, topk=rp.topk, combined_us=row.kernel_path_us
         )
         row.effective_tflops = m["effective_tflops"]
         row.mfu = m["mfu"]
     if e2e_samples:
-        e = summarize(e2e_samples)
-        row.e2e_us = e["median"]
-        row.e2e_us_p95 = e["p95"]
+        row.e2e_us = summarize(e2e_samples)["median"]
+        row.e2e_us_p95 = summarize(e2e_p95s)["median"] if e2e_p95s else summarize(e2e_samples)["p95"]
     if logits_samples:
         row.logits_diff = max(logits_samples)  # worst-case correctness across reps
     row.correctness_pass = correctness

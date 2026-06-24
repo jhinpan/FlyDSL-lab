@@ -55,43 +55,51 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
-### Baseline — locked ref `523ca1c7` full (Round 2)
+### Baseline — locked ref `523ca1c7` (strict path)
 
 - Result: `baseline` (reference table; not a tuning attempt).
 - Config: baseline default tiles per shape from `scripts/run_benchmark.sh`
   (stage1 64/256/256, or 32/128/256 for GPT-OSS; stage2 tile_n2/tile_k2 = 256/256).
-- Scope: all 4 models × in-scope dtypes × full DEC-6 token grid = **96 points**.
 - GPU: AMD Instinct MI350X (gfx950), `idle_gpu_verified=True`.
 - Commit: `523ca1c7e224…` (isolated worktree build `flydsl-baseline-523ca1c7`).
-- Protocol: warmup=10, iters=100, **median + p95** over reps=2, graph-capture OFF,
-  L2 flush per iter (L2-rotation), clocks pinned.
-- aiter e2e guardrail enabled via `scripts/sync_aiter_flydsl_kernels.sh` (overlays
-  this checkout's MoE kernels onto aiter's stale 0.1.8-era vendored copies so the
-  e2e path runs against the same kernels; strict correctness gated on
-  `logits_diff <= 0.01` by the harness).
+- Protocol: warmup=10, iters=100, **true per-iteration timed-loop median + p95**
+  (FlyDSL via `FLYDSL_PERF_DIST`; aiter e2e = rotated-average median +
+  per-iteration p95), graph-capture OFF, clocks pinned. aiter e2e guardrail uses
+  the strict/AOT/model-correct runner `scripts/aiter_strict_point.py`
+  (`strict_accuracy=True`, true per-model activation/gate, AOT-cache check for
+  a4w4) via `scripts/sync_aiter_flydsl_kernels.sh` (kernel overlay).
 - CSVs:
-  - `docs/baseline_523ca1c7.csv` — full 96-point sweep (kernel-path median+p95,
-    e2e median+p95, logits_diff, correctness_pass).
-  - `docs/baseline_523ca1c7_validated.csv` — the **56-point correctness-passing
-    subset** (all a4w4 + DeepSeek V3 a8w4); passes
-    `validate_baseline_csv(expected_keys=validated_point_keys())` with **valid=True,
-    0 missing, 0 row errors**.
-  - `docs/baseline_523ca1c7_run2.csv` + `docs/baseline_523ca1c7_repeatability.json`
-    — independent second sweep + DEC-2 repeatability: **kernel-path is fully
-    repeatable (0/96 unstable)**; e2e drifts up to ~10% at small tokens (tiny
-    absolute us, host-dominated, reps=2).
-- **Correctness quarantine (Round 2 finding):** a8w4 for **DeepSeek V4, Kimi K2,
-  GPT-OSS** fails the aiter correctness gate (`logits_diff ≈ 0.99`; large GPT-OSS
-  a8w4 also crashes/OOM). Root cause (confirmed against aiter source + Codex
-  analyze): the aiter `test_moe_2stage.py` **legacy CLI path hardcodes
-  ActivationType.Swiglu and GateMode.INTERLEAVE for the per_1x32 fp8×fp4 case**
-  (`_iter_legacy_cases` ~L758, `_effective_gate_mode`), so Silu models are
-  measured with a Swiglu+interleave kernel vs a Silu reference → near-total
-  mismatch. This is a harness-path artifact, NOT a demonstrated FlyDSL kernel bug
-  (a4w4 passes everywhere; DS V3 a8w4 passes through the same harness). These
-  shapes are quarantined (`moe_tuning_spec.QUARANTINED_SHAPES`) and excluded from
-  the validated baseline and from any win claim until validated via aiter's
-  model-CSV mode.
-- Status: **validated 56-point baseline is complete and passes its validator with
-  exit 0.** Tile-sweep tuning may proceed on the validated subset; quarantined
-  a8w4 shapes await the CSV-mode correctness fix.
+  - `docs/baseline_523ca1c7_validated.csv` — the **40-point a4w4 baseline** (DS V3,
+    Kimi K2, GPT-OSS a4w4), all `correctness_pass=True`, kernel-path + e2e
+    median+p95; passes `validate_baseline_csv(validated_point_keys())` **valid=True,
+    0 missing, 0 errors**. This is the validated reference for the in-scope a4w4 set.
+  - `docs/baseline_523ca1c7_validated_run2.csv` +
+    `docs/baseline_523ca1c7_repeatability.json` — independent second sweep + DEC-2
+    repeatability under the truthful timed-loop protocol. Kernel-path: 11/40
+    points outside the band (worst ~4.6%, all small-token where absolute us is
+    tiny); e2e (guardrail): 8/40 (worst ~7%). The true per-iteration timing is
+    noisier than a profiler-rotated average; win-claims will need more reps or a
+    tighter small-token band.
+  - `docs/baseline_523ca1c7.csv` — honest full 96-point record (40 a4w4 pass + 56
+    a8w4 via the strict path, `correctness_pass=False`). Default
+    `validate_baseline_csv` fails ONLY on the a8w4 correctness rows, 0 missing.
+  - `docs/baseline_523ca1c7_a8w4_strict.csv` + `docs/a8w4_evidence.md` — the a8w4
+    strict-path failure evidence with per-row `strict_error`, `error_category`,
+    `aot_status`, and the FlyDSL command/tiles.
+- **a8w4 correctness BLOCK (corrected; supersedes the earlier root cause):** under
+  the strict, model-correct path the failing axis is the **non-fp4 activation**
+  operand — fp8 (a8w4) AND bf16 (a16w4) both fail (`logits_diff ≈ 0.98`) with fp4
+  weight; only fp4 activation (a4w4) passes (~1e-5). Root cause = an
+  activation-dtype-dependent aiter weight/scale-prep + stage2 A2-scale CONTRACT
+  mismatch (aiter uses `shuffle_weight_a16w4`/`shuffle_scale_a16w4` and
+  `a2_scale=None` for non-fp4 activation; the FlyDSL mixed stage2 kernel expects a
+  pre-scattered A2 E8M0 scale). It is **NOT a FlyDSL kernel math bug** — this
+  checkout's own `tests/kernels/test_moe_gemm.py --in_dtype a8w4` passes with
+  `--skip_ref false`. Fixing it is aiter-environment work outside the GEMM-tuning
+  scope. All a8w4 are quarantined (`moe_tuning_spec.QUARANTINED_SHAPES`); the a8w4
+  scope question is OPEN for the user (a4w4-only tuning vs authorize aiter-wrapper
+  work). No a8w4 win may be claimed until a8w4 e2e correctness is green.
+- Status: the **a4w4 baseline is validated** (exit 0 over a4w4 keys). The default
+  full-96 baseline remains a8w4-correctness-blocked, with fully auditable per-row
+  a8w4 failure evidence. Tile-sweep tuning is NOT started; it awaits the user a8w4
+  scope decision.
