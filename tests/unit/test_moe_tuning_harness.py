@@ -596,6 +596,125 @@ def _csv(path, rows):
             w.writerow(r)
 
 
+def _gate_csv(path, rows):
+    import csv as _c
+
+    cols = [
+        "model",
+        "dtype",
+        "act",
+        "token",
+        "kernel_path_us",
+        "e2e_us",
+        "aot_status",
+        "correctness_pass",
+        "logits_diff",
+    ]
+    with open(path, "w", newline="") as f:
+        w = _c.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
+def _gate_row(**over):
+    base = dict(
+        model="kimi_k2",
+        dtype="a4w4",
+        act="silu",
+        token=16,
+        kernel_path_us=150.0,
+        e2e_us=80.0,
+        aot_status="checked",
+        correctness_pass=True,
+        logits_diff=0.001,
+    )
+    base.update(over)
+    return base
+
+
+def test_selected_candidate_gate_accepts_checked_correct(tmp_path):
+    path = str(tmp_path / "cand.csv")
+    _gate_csv(path, [_gate_row(token=16), _gate_row(token=16384, kernel_path_us=1700, e2e_us=1500)])
+    res = ledger.selected_candidate_gate(path)
+    assert res["passed"] is True and res["n_rows"] == 2 and res["violations"] == []
+
+
+def test_selected_candidate_gate_rejects_no_aot_and_bad_correctness(tmp_path):
+    # no_aot row (repeatability/diagnostic bypass) can never be promoted to a win.
+    p1 = str(tmp_path / "no_aot.csv")
+    _gate_csv(p1, [_gate_row(aot_status="no_aot")])
+    r1 = ledger.selected_candidate_gate(p1)
+    assert r1["passed"] is False and any("aot_status" in v[1] for v in r1["violations"])
+
+    # failed correctness rejected.
+    p2 = str(tmp_path / "bad_correct.csv")
+    _gate_csv(p2, [_gate_row(correctness_pass=False)])
+    r2 = ledger.selected_candidate_gate(p2)
+    assert r2["passed"] is False and any("correctness_pass" in v[1] for v in r2["violations"])
+
+    # logits over threshold rejected.
+    p3 = str(tmp_path / "bad_logits.csv")
+    _gate_csv(p3, [_gate_row(logits_diff=0.05)])
+    r3 = ledger.selected_candidate_gate(p3)
+    assert r3["passed"] is False and any("logits_diff" in v[1] for v in r3["violations"])
+
+    # empty CSV: nothing to promote -> not passed.
+    p4 = str(tmp_path / "empty.csv")
+    _gate_csv(p4, [])
+    assert ledger.selected_candidate_gate(p4)["passed"] is False
+
+
+def test_scan_replay_consistency(tmp_path):
+    path = str(tmp_path / "attempts.jsonl")
+    import json as _json
+
+    def _write(recs):
+        with open(path, "w") as f:
+            for r in recs:
+                f.write(_json.dumps(r) + "\n")
+
+    # multi-file attempt whose command replays BOTH files -> clean.
+    good = {
+        "result": "neutral",
+        "csv_path": "docs/a.csv;docs/b.csv",
+        "command": "h candidate --out docs/a.csv ; h candidate --out docs/b.csv ; repeatability_check",
+        "timestamp": 1.0,
+    }
+    _write([good])
+    assert ledger.scan_replay_consistency(path) == []
+
+    # command misses b.csv -> offender.
+    bad = dict(good, command="h candidate --out docs/a.csv", timestamp=2.0)
+    _write([bad])
+    off = ledger.scan_replay_consistency(path)
+    assert off and off[0][0] == 2.0 and "docs/b.csv" in off[0][1]
+
+    # brace shorthand does not literally contain either file -> offender.
+    brace = dict(good, command="h candidate --out docs/{a,b}.csv", timestamp=3.0)
+    _write([brace])
+    assert ledger.scan_replay_consistency(path)
+
+    # required file hidden behind a '#' comment -> offender.
+    commented = dict(good, command="h candidate --out docs/a.csv  # then docs/b.csv", timestamp=4.0)
+    _write([commented])
+    assert ledger.scan_replay_consistency(path)
+
+    # superseded records are skipped.
+    superseded = dict(bad, superseded_by=9.0, timestamp=5.0)
+    _write([superseded])
+    assert ledger.scan_replay_consistency(path) == []
+
+
+def test_committed_repeatability_attempts_replayable():
+    """Committed multi-file repeatability attempts must replay all their CSVs."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    off = ledger.scan_replay_consistency(attempts)
+    assert off == [], f"non-replayable committed repeatability attempts: {off}"
+
+
 def test_compare_csvs_detects_regression_and_wins(tmp_path):
     base = str(tmp_path / "base.csv")
     cand = str(tmp_path / "cand.csv")

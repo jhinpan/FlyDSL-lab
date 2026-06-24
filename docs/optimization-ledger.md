@@ -77,12 +77,21 @@ file is the human-facing running log.
   for repeatability).
 - Result: **`repeatability_check` `stable=true`** — 0 unstable points on BOTH
   `kernel_path_us` and `e2e_us` across all 16 tokens. **Kimi K2 token-128**:
-  kernel-path drift 0.6µs < band 5.88µs; e2e drift 0.25µs < band 3.92µs. The prior
-  **token-64 e2e ~16µs** outlier does **not** reproduce on this strict path (0.43µs
-  drift) — that figure came from the legacy-CLI re-scored CSV pair. **No band
-  widening.** → **AC-1.1 MET on the official two-metric checker.**
-- Supersedes the R5 kernel-path-only artifact (which the checker reported
-  `stable=false` for, due to missing e2e) and the R5 `/tmp` attempt command.
+  kernel-path drift 0.8µs < band 5.87µs; e2e drift 0.37µs < band 3.94µs. The prior
+  **token-64 e2e ~16µs** outlier does **not** reproduce on this strict path — that
+  figure came from the legacy-CLI re-scored CSV pair. **No band widening.** →
+  **AC-1.1 MET on the official two-metric checker.**
+- **Replayable provenance**: re-run from clean HEAD `61c677b0`, whose
+  `scripts/moe_tuning_harness.py` contains the recorded `--no-aot-check` flag; the
+  CSV rows and the attempt record both carry that commit, and the attempt
+  `command` gives the exact run1/run2/`repeatability_check` commands (no `/tmp`, no
+  `#`-comment steps, no `{1,2}` brace shorthand). Supersedes the defective R5
+  kernel-path-only and R6 non-replayable attempts.
+- **AOT honesty / gate**: `aot_status=no_aot` (env AOT cache unpopulated; e2e and
+  logits are real). This is **neutral repeatability evidence only** — a `no_aot`
+  row can never be promoted to a candidate win: `ledger.selected_candidate_gate`
+  rejects `aot_status != checked` / `correctness_pass != True` / `logits_diff >
+  0.01`, and `ledger.scan_replay_consistency` keeps multi-file attempts replayable.
 - Artifacts: `docs/repeat_kimi_a4w4_e2e_run1.csv`,
   `docs/repeat_kimi_a4w4_e2e_run2.csv`,
   `docs/baseline_523ca1c7_repeatability.json`

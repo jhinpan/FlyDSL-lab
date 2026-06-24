@@ -295,6 +295,37 @@ def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     return cv
 
 
+def selected_candidate_gate(candidate_csv: str, max_logits_diff: float = 0.01) -> dict:
+    """Hard gate a candidate CSV before it can be promoted to a win.
+
+    A selected candidate must clear the strict correctness + AOT-cache hard gate on
+    EVERY row: ``aot_status == "checked"`` (the strict aiter run required a
+    pre-populated AOT cache, not the ``no_aot`` repeatability/diagnostic bypass),
+    ``correctness_pass`` is true, and ``logits_diff <= max_logits_diff``.  Rows
+    measured with ``--no-aot-check`` (``aot_status == "no_aot"``) are valid for
+    NEUTRAL repeatability/diagnostic artifacts but can never be promoted to a win,
+    so they fail this gate.
+
+    Returns ``{"passed": bool, "n_rows": int, "violations": [(key, reason), ...]}``.
+    ``passed`` is False if there are zero rows (nothing to promote) or any violation.
+    """
+    rows = read_point_csv(candidate_csv)
+    violations: List[Tuple] = []
+    for key, row in rows.items():
+        aot = (row.get("aot_status") or "").strip()
+        if aot != "checked":
+            violations.append((key, f"aot_status={aot or 'missing'} (need 'checked')"))
+        cp = (row.get("correctness_pass") or "").strip().lower()
+        if cp not in ("true", "1"):
+            violations.append((key, f"correctness_pass={row.get('correctness_pass')!r} (need True)"))
+        ld = _f(row, "logits_diff")
+        if ld is None:
+            violations.append((key, "logits_diff missing"))
+        elif ld > max_logits_diff:
+            violations.append((key, f"logits_diff={ld} > {max_logits_diff}"))
+    return {"passed": bool(rows) and not violations, "n_rows": len(rows), "violations": violations}
+
+
 def repeatability_check(csv_a: str, csv_b: str) -> dict:
     """Compare two independent sweeps of the SAME config under the no-regression policy.
 
@@ -328,6 +359,40 @@ def repeatability_check(csv_a: str, csv_b: str) -> dict:
     }
 
 
+def scan_replay_consistency(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
+    """Find committed attempts whose ``csv_path`` lists files the ``command`` cannot replay.
+
+    A multi-file attempt (``csv_path`` = ``a.csv;b.csv``) must name EVERY listed
+    file in its ``command`` string, so the attempt is replayable end-to-end from
+    the ledger alone (no brace shorthand like ``run{1,2}.csv``, no required step
+    hidden behind a ``#`` comment).  Superseded records are skipped.  Returns a
+    list of ``(timestamp, [missing files])`` for offending records (empty == clean).
+    """
+    if not os.path.exists(path):
+        return []
+    offenders: List[Tuple] = []
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if "superseded_by" in rec:
+                continue
+            csv_path = rec.get("csv_path") or ""
+            files = [p for p in csv_path.split(";") if p.strip()]
+            if len(files) < 2:
+                continue  # single/no file: nothing multi-file to reconcile
+            command = rec.get("command") or ""
+            # Strip anything after a '#' on each segment: a required step hidden in
+            # a comment is not actually replayed by a shell.
+            replayable = " ".join(seg.split("#", 1)[0] for seg in command.splitlines())
+            missing = [fp for fp in files if fp not in replayable]
+            if missing:
+                offenders.append((rec.get("timestamp"), missing))
+    return offenders
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
@@ -337,6 +402,8 @@ __all__ = [
     "read_point_csv",
     "compare_point",
     "compare_csvs",
+    "selected_candidate_gate",
+    "scan_replay_consistency",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
