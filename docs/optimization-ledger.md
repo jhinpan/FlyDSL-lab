@@ -76,7 +76,7 @@ file is the human-facing running log.
   - `docs/baseline_523ca1c7_validated_run2.csv` +
     `docs/baseline_523ca1c7_repeatability.json` — two independent sweeps under the
     faithful L2-flush rotated protocol at reps=3. Residual instability is confined
-    to SMALL TOKENS (1-32): kernel-path 8/40 (worst ~3.9us), e2e 6/40 (worst
+    to SMALL TOKENS (1-32): kernel-path 8/40 (worst ~5.1us), e2e 6/40 (worst
     ~2.9us), all just over the `max(2%, 2us)` absolute floor. This is irreducible
     shared-node jitter at tiny absolute us (30-180us); raising reps 1->3 did not
     remove it. At a `max(2%, 5us)` small-token floor, e2e is fully stable (0/40)
