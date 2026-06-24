@@ -1007,3 +1007,79 @@ def test_main_clock_provenance_fail_closed(monkeypatch, tmp_path):
     rc = harness._main(["baseline", "--gpu", "0", "--assume-idle", "--no-e2e", "--allow-unpinned", "--out", out])
     assert rc == 0
     assert written["rows"][0].provenance.clocks_pinned is False
+
+
+def test_regime_aware_abs_floor():
+    # DEC-9: 8us absolute floor for tokens<=64, 2us for tokens>=128.
+    assert spec.abs_floor_us(1) == 8.0
+    assert spec.abs_floor_us(64) == 8.0
+    assert spec.abs_floor_us(128) == 2.0
+    assert spec.abs_floor_us(32768) == 2.0
+
+
+def test_is_regression_regime_aware():
+    # Small token (16): a 5us drift on a 130us base is within the 8us floor -> NOT a regression.
+    assert spec.is_regression(130.0, 135.0, token=16) is False
+    # Small token: 9us drift on 130us base -> regression (exceeds 8us AND 2%).
+    assert spec.is_regression(130.0, 139.0, token=16) is True
+    # Large token (128): 5us drift on 130us base -> regression under the 2us floor.
+    assert spec.is_regression(130.0, 135.0, token=128) is True
+    # Back-compat: token=None keeps the strict 2us floor.
+    assert spec.is_regression(130.0, 135.0) is True
+
+
+def test_repeatability_check_regime_aware(tmp_path):
+    a = str(tmp_path / "a.csv")
+    b = str(tmp_path / "b.csv")
+    _csv(
+        a,
+        [
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16,
+                "kernel_path_us": 130,
+                "e2e_us": 40,
+                "mfu": 0.05,
+            },
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 128,
+                "kernel_path_us": 290,
+                "e2e_us": 250,
+                "mfu": 0.3,
+            },
+        ],
+    )
+    _csv(
+        b,
+        [
+            # token 16: +5us kernel-path -> within 8us small-token floor -> stable.
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16,
+                "kernel_path_us": 135,
+                "e2e_us": 40,
+                "mfu": 0.05,
+            },
+            # token 128: +7us -> exceeds 2us floor (and 2%) -> unstable.
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 128,
+                "kernel_path_us": 297,
+                "e2e_us": 250,
+                "mfu": 0.3,
+            },
+        ],
+    )
+    res = ledger.repeatability_check(a, b)
+    kp = res["unstable"]["kernel_path_us"]
+    assert any(u[0] == ("kimi_k2", "a4w4", "silu", "128") for u in kp)  # 128 unstable
+    assert all(u[0] != ("kimi_k2", "a4w4", "silu", "16") for u in kp)  # 16 stable under 8us

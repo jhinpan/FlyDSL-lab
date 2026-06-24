@@ -143,9 +143,9 @@ def compare_point(baseline: dict, candidate: dict) -> PointVerdict:
     b_mfu, c_mfu = _f(baseline, "mfu"), _f(candidate, "mfu")
 
     if b_kp is not None and c_kp is not None:
-        v.kernel_path_regression = spec.is_regression(b_kp, c_kp)
+        v.kernel_path_regression = spec.is_regression(b_kp, c_kp, token=token)
     if b_e2e is not None and c_e2e is not None:
-        v.e2e_regression = spec.is_regression(b_e2e, c_e2e)
+        v.e2e_regression = spec.is_regression(b_e2e, c_e2e, token=token)
 
     if spec.is_large_token(token) and token in spec.MFU_TARGET_BUCKETS:
         if b_mfu is not None and c_mfu is not None:
@@ -237,22 +237,27 @@ def repeatability_check(csv_a: str, csv_b: str) -> dict:
     """Compare two independent sweeps of the SAME config under the no-regression policy.
 
     For each shared (model, dtype, act, token) point, a metric is "stable" if the
-    two runs agree within the the no-regression policy noise band (NOT a regression in either
-    direction): ``|b - a| <= max(a*REGRESSION_REL, ABS_US_BAND)``.  Returns the
-    set of unstable points per metric; an empty unstable set demonstrates the
-    harness is repeatable (the measurement protocol).
+    two runs agree within the no-regression noise band (NOT a regression in either
+    direction): ``|b - a| <= max(a*REGRESSION_REL, abs_floor_us(token))``, where
+    the absolute floor is regime-aware (8 us for tokens <= SMALL_TOKEN_MAX, 2 us
+    otherwise).  Returns the set of unstable points per metric; an empty unstable
+    set demonstrates the harness is repeatable (the measurement protocol).
     """
     a = read_point_csv(csv_a)
     b = read_point_csv(csv_b)
     shared = sorted(set(a) & set(b))
     unstable = {"kernel_path_us": [], "e2e_us": []}
-    band = lambda x: max(abs(x) * spec.REGRESSION_REL, spec.ABS_US_BAND)  # noqa: E731
+
+    def band(x, token):
+        return max(abs(x) * spec.REGRESSION_REL, spec.abs_floor_us(token))
+
     for key in shared:
+        token = int(float(a[key].get("token") or 0))
         for metric in ("kernel_path_us", "e2e_us"):
             va, vb = _f(a[key], metric), _f(b[key], metric)
             if va is None or vb is None:
                 unstable[metric].append((key, "missing"))
-            elif abs(vb - va) > band(va):
+            elif abs(vb - va) > band(va, token):
                 unstable[metric].append((key, va, vb))
     return {
         "n_shared": len(shared),

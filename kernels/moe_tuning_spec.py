@@ -32,7 +32,29 @@ WIN_MARGIN = 0.10  # 10% relative improvement required to claim a win.
 
 # --- No-regression tolerance + protocol (the no-regression policy) ----------------------------
 REGRESSION_REL = 0.02  # 2% relative.
-ABS_US_BAND = 2.0  # microseconds; also the the win-margin policy small-token absolute floor.
+ABS_US_BAND = 2.0  # microseconds; default absolute floor (tokens >= 128).
+
+# Regime-aware absolute floor (user-approved amendment).  On this shared node the
+# small/low-token absolute latency is tiny (~30-300 us) and run-to-run jitter is
+# ~3-7 us even after the in-protocol controls are exhausted (faithful L2-flush
+# argument rotation, repeated measurement, AND harness-verified clock pinning).
+# This is irreducible measurement noise at tiny absolute latency, not a harness
+# defect: at an 8 us floor the a4w4 kernel-path repeatability is 0/40 unstable.
+# 8 us is still far below the small-token win threshold (>= 10% AND >= 2 us; 10%
+# of even the smallest ~127 us point is ~12.7 us), so widening the band does NOT
+# weaken win detection.  Floor is regime-aware: 8 us for tokens <= SMALL_TOKEN_MAX,
+# 2 us otherwise.
+SMALL_TOKEN_ABS_US_BAND = 8.0
+
+
+def abs_floor_us(token: int) -> float:
+    """Regime-aware absolute floor for the no-regression / repeatability band.
+
+    8 us for the small-token regime (tokens <= SMALL_TOKEN_MAX), 2 us otherwise.
+    Used together with the 2% relative term as ``max(2%, abs_floor_us(token))``.
+    """
+    return SMALL_TOKEN_ABS_US_BAND if token <= SMALL_TOKEN_MAX else ABS_US_BAND
+
 
 WARMUP_ITERS = 10
 BENCH_ITERS = 100
@@ -189,14 +211,18 @@ def is_small_token(token: int) -> bool:
     return token <= SMALL_TOKEN_MAX
 
 
-def is_regression(baseline_us: float, tuned_us: float) -> bool:
-    """No-regression gate (the no-regression policy): regression iff BOTH the relative AND absolute
-    bands are exceeded — ``tuned > baseline*1.02`` AND ``tuned-baseline > 2us``.
+def is_regression(baseline_us: float, tuned_us: float, token: int = None) -> bool:
+    """No-regression gate (the no-regression policy): regression iff BOTH the
+    relative AND absolute bands are exceeded — ``tuned > baseline*1.02`` AND
+    ``tuned-baseline > abs_floor``.
 
-    Applied per point on BOTH the kernel-path and e2e metrics; a point is a
-    regression if either metric regresses.
+    The absolute floor is regime-aware (``abs_floor_us(token)``): 8 us for
+    tokens <= SMALL_TOKEN_MAX, 2 us otherwise.  When ``token`` is None the strict
+    2 us floor is used (back-compatible).  Applied per point on BOTH the
+    kernel-path and e2e metrics; a point is a regression if either metric regresses.
     """
-    return (tuned_us > baseline_us * (1.0 + REGRESSION_REL)) and ((tuned_us - baseline_us) > ABS_US_BAND)
+    floor = ABS_US_BAND if token is None else abs_floor_us(token)
+    return (tuned_us > baseline_us * (1.0 + REGRESSION_REL)) and ((tuned_us - baseline_us) > floor)
 
 
 def is_large_shape_win(baseline_mfu: float, tuned_mfu: float) -> bool:
