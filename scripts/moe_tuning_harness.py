@@ -31,6 +31,7 @@ import csv
 import json
 import os
 import re
+import shlex
 import statistics
 import subprocess
 import sys
@@ -557,6 +558,10 @@ def prepare_candidate_run(overrides: dict, model=None, dtype=None, tokens=None, 
                     "stage": 0,  # candidate-tile rejection spans both stages; reason names the stage
                     "config": {k: overrides.get(k) for k in overrides},
                     "reason": str(e),
+                    # No measured artifact exists for a pre-compile rejection, but
+                    # the keys must be present to match a measured attempt's schema.
+                    "csv_path": "",
+                    "profile_path": "",
                 }
             )
             raise ValueError(f"illegal candidate at {rp.model}/{rp.dtype} t={rp.token}: {e}") from e
@@ -1011,7 +1016,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
 
     if args.mode == "candidate":
         toks = [int(t) for t in args.tokens.replace(",", " ").split()] if args.tokens else None
-        top_command = "python3 " + " ".join([os.path.relpath(__file__, _REPO_ROOT), *(argv or sys.argv[1:])])
+        top_command = "python3 " + shlex.join([os.path.relpath(__file__, _REPO_ROOT), *(argv or sys.argv[1:])])
         try:
             run_list, tiles = prepare_candidate_run(
                 overrides, model=args.model, dtype=args.dtype, tokens=toks, prov=prov, command=top_command

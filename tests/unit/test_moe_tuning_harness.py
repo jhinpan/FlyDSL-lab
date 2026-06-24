@@ -498,6 +498,7 @@ def _complete_rejected(**over):
         stage=0,
         config={"tile_m1": 16},
         reason="illegal candidate tiles: s1=fp4 tile_m<32",
+        selection={"model": "kimi_k2", "dtype": "a4w4", "tokens": [64]},
         gpu_id="0",
         gpu_model="MI350X",
         branch="b",
@@ -505,6 +506,8 @@ def _complete_rejected(**over):
         command="python3 scripts/moe_tuning_harness.py candidate --tile-m1 16",
         warmup=10,
         iters=100,
+        csv_path="",  # present-but-empty: no measured artifact pre-compile
+        profile_path="",
     )
     base.update(over)
     return base
@@ -514,6 +517,8 @@ def test_rejected_candidate_full_provenance_roundtrip(tmp_path):
     path = str(tmp_path / "attempts.jsonl")
     rec = ledger.append_rejected_candidate(_complete_rejected(), path=path, now=7.0)
     assert rec["result"] == "rejected_candidate" and rec["timestamp"] == 7.0
+    # csv_path/profile_path are present (empty allowed); selection is a non-empty dict.
+    assert rec["csv_path"] == "" and rec["profile_path"] == "" and rec["selection"]
     # stage 0 is a valid value (candidate-tile rejection spanning both stages).
     rec0 = ledger.append_rejected_candidate(_complete_rejected(stage=0), path=path, now=8.0)
     assert rec0["stage"] == 0
@@ -523,11 +528,25 @@ def test_rejected_candidate_full_provenance_roundtrip(tmp_path):
 
 def test_rejected_candidate_missing_provenance_rejected(tmp_path):
     path = str(tmp_path / "attempts.jsonl")
-    # Each required provenance field, when missing, must be refused.
+    # Each required (non-empty) provenance field, when blanked, must be refused.
     for field in ("act", "gpu_id", "gpu_model", "branch", "commit", "command", "warmup", "iters"):
         bad = _complete_rejected(**{field: ""})
         with pytest.raises(ValueError, match="missing fields"):
             ledger.append_rejected_candidate(bad, path=path)
+    # csv_path/profile_path keys must EXIST even though empty is allowed: drop them.
+    for field in ("csv_path", "profile_path"):
+        bad = _complete_rejected()
+        del bad[field]
+        with pytest.raises(ValueError, match="missing fields"):
+            ledger.append_rejected_candidate(bad, path=path)
+    # selection None/"" trips the missing-fields gate; {} / non-dict trips the
+    # dedicated selection gate.
+    for sel in (None, ""):
+        with pytest.raises(ValueError, match="missing fields"):
+            ledger.append_rejected_candidate(_complete_rejected(selection=sel), path=path)
+    for sel in ({}, "a4w4"):
+        with pytest.raises(ValueError, match="selection"):
+            ledger.append_rejected_candidate(_complete_rejected(selection=sel), path=path)
     # The minimal-only record (the old contract) is now rejected.
     with pytest.raises(ValueError, match="missing fields"):
         ledger.append_rejected_candidate(
@@ -535,6 +554,36 @@ def test_rejected_candidate_missing_provenance_rejected(tmp_path):
         )
     # No partial file should have been written.
     assert not os.path.exists(path)
+
+
+def test_committed_rejected_records_are_contract_complete():
+    """Every committed rejected_candidate record must carry full provenance, unless
+    it is an explicitly superseded pre-contract artifact (marked superseded_by)."""
+    import json as _json
+
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    required = set(ledger.REQUIRED_REJECTED_FIELDS)
+    present_keys = set(ledger.REQUIRED_REJECTED_PRESENT_KEYS)
+    offenders = []
+    for ln in open(attempts):
+        ln = ln.strip()
+        if not ln:
+            continue
+        rec = _json.loads(ln)
+        if rec.get("result") != "rejected_candidate":
+            continue
+        if "superseded_by" in rec:  # incomplete historical record, explicitly invalidated
+            continue
+        missing = [k for k in required if rec.get(k) in (None, "")]
+        missing += [k for k in present_keys if k not in rec]
+        sel = rec.get("selection")
+        if not isinstance(sel, dict) or not sel:
+            missing.append("selection")
+        if missing:
+            offenders.append((rec.get("timestamp"), missing))
+    assert not offenders, f"incomplete committed rejected records: {offenders}"
 
 
 def _csv(path, rows):

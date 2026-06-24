@@ -58,7 +58,8 @@ REQUIRED_ATTEMPT_FIELDS = (
 # identity + run-provenance class as a measured attempt so the rejection is
 # auditable (the rejected-candidate ledger contract).  ``stage`` is 0 when the
 # rejection is at the candidate-tile level spanning both stages; the reason
-# string still names the offending stage.
+# string still names the offending stage.  ``selection`` records the run's
+# model/dtype/tokens filter so the rejection is reproducible.
 REQUIRED_REJECTED_FIELDS = (
     "model",
     "dtype",
@@ -67,6 +68,7 @@ REQUIRED_REJECTED_FIELDS = (
     "stage",
     "config",
     "reason",
+    "selection",
     "gpu_id",
     "gpu_model",
     "branch",
@@ -74,6 +76,14 @@ REQUIRED_REJECTED_FIELDS = (
     "command",
     "warmup",
     "iters",
+)
+
+# Keys that must be PRESENT on a rejected record but may legitimately be empty
+# strings: a pre-compile rejection produces no measured CSV/profile artifact, yet
+# the keys must exist so the record schema matches a measured attempt.
+REQUIRED_REJECTED_PRESENT_KEYS = (
+    "csv_path",
+    "profile_path",
 )
 
 
@@ -125,15 +135,22 @@ def append_rejected_candidate(record: dict, path: str = ATTEMPTS_JSONL, now: flo
 
     ``record`` must carry the full provenance class (``REQUIRED_REJECTED_FIELDS``)
     so a rejected search candidate is as auditable as a measured attempt — even
-    though it never reached compile/GPU and therefore has no measured metrics
-    (``csv_path``/``profile_path`` may be absent/empty).  Raises ``ValueError`` if
-    any required field is missing, so an incomplete rejection can never be
-    recorded (the rejected-candidate contract negative gate).
+    though it never reached compile/GPU.  The measured-artifact keys
+    (``REQUIRED_REJECTED_PRESENT_KEYS``: ``csv_path``/``profile_path``) must be
+    present but may be empty strings (no artifact exists pre-compile).  Raises
+    ``ValueError`` if any required field is missing, so an incomplete rejection can
+    never be recorded (the rejected-candidate contract negative gate).
     """
     # Treat only None / "" as missing — integer 0 (stage, warmup, iters) is valid.
     missing = [k for k in REQUIRED_REJECTED_FIELDS if record.get(k) in (None, "")]
+    # Artifact keys must EXIST (empty string allowed); only a truly absent key fails.
+    missing += [k for k in REQUIRED_REJECTED_PRESENT_KEYS if k not in record]
     if missing:
         raise ValueError(f"rejected-candidate record missing fields: {missing}")
+    # selection must be a non-empty dict so the rejection's run filter is recorded.
+    sel = record.get("selection")
+    if not isinstance(sel, dict) or not sel:
+        raise ValueError("rejected-candidate record 'selection' must be a non-empty dict")
     rec = {"result": "rejected_candidate", **record}
     rec["timestamp"] = now if now is not None else time.time()
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
