@@ -6,29 +6,56 @@
     "clocks_pinned": "harness-verified",
     "band": "regime-aware: max(2pct,8us) tokens<=64, max(2pct,2us) tokens>=128 (DEC-9)"
   },
-  "n_shared": 40,
-  "kernel_path_unstable": 1,
-  "kernel_path_unstable_points": [
-    {
-      "model": "kimi_k2",
-      "token": 128,
-      "run1": 292.4,
-      "run2": 299.2,
-      "drift_us": 6.8,
-      "band_us": 5.8
-    }
-  ],
-  "e2e_unstable": 1,
-  "e2e_unstable_points": [
-    {
-      "model": "kimi_k2",
-      "token": 64,
-      "run1": 168.4,
-      "run2": 184.7,
-      "drift_us": 16.4,
-      "band_us": 8.0
-    }
-  ],
-  "finding": "Under the user-approved DEC-9 regime-aware band, small-token noise is absorbed (8us floor for tokens<=64). Residual: kernel_path 1 point(s) [('kimi_k2', 128, 6.8)] and e2e 1 point(s) [('kimi_k2', 64, 16.4)]. The kimi_k2/64 e2e ~16us point is the documented guardrail outlier (e2e is a guardrail, not the tuning target). The kimi_k2/128 kernel-path point (6.8us, ~2.3pct) is a single borderline mid-token point at 128 (outside the small-token regime, under the strict 2us floor) -- to be re-confirmed on the next fresh sweep; treat as watch, not a baseline reject.",
-  "note": "This artifact uses the existing prior-loop a4w4 CSV pair re-scored under DEC-9; the next live a4w4 sweep will re-measure under pinned clocks and the DEC-9 band."
+  "live_remeasure_kimi_k2_a4w4": {
+    "scope": "Kimi K2 a4w4, full 16-token grid, kernel-path metric only",
+    "commit": "b920522d",
+    "gpu": "AMD Instinct MI350X (gfx950)",
+    "clocks_pinned": "harness-verified (setup_run_provenance, clocks_pinned=True)",
+    "idle_gpu_verified": true,
+    "reps_per_point": 3,
+    "csvs": [
+      "docs/repeat_kimi_a4w4_run1.csv",
+      "docs/repeat_kimi_a4w4_run2.csv"
+    ],
+    "n_shared": 16,
+    "kernel_path_unstable": 0,
+    "kernel_path_unstable_points": [],
+    "kimi_k2_token128": {
+      "run1": 293.7,
+      "run2": 298.5,
+      "drift_us": 4.8,
+      "band_us": 5.87,
+      "pct": 1.6,
+      "stable": true
+    },
+    "max_drift_minus_band_us": -1.07,
+    "finding": "FRESH live pinned-clock re-measurement RESOLVES the previously-flagged Kimi K2 token-128 kernel-path point: drift 4.8us < DEC-9 band 5.87us (1.6pct, under the 2pct relative term alone -- no band widening needed). All 16 kernel-path points are stable under DEC-9. e2e was not measured this round (kernel-path is the tuning target and the flagged residual; the aiter e2e AOT cache is unpopulated in this environment, and the only prior e2e residual -- kimi_k2/64 ~16us -- is the documented guardrail outlier, tracked as a queued issue)."
+  },
+  "historical_rescored_pre_live": {
+    "note": "SUPERSEDED by live_remeasure_kimi_k2_a4w4 above. This block is the prior-loop a4w4 CSV pair re-scored under DEC-9 (NOT a fresh measurement); retained for provenance.",
+    "n_shared": 40,
+    "kernel_path_unstable": 1,
+    "kernel_path_unstable_points": [
+      {
+        "model": "kimi_k2",
+        "token": 128,
+        "run1": 292.4,
+        "run2": 299.2,
+        "drift_us": 6.8,
+        "band_us": 5.8
+      }
+    ],
+    "e2e_unstable": 1,
+    "e2e_unstable_points": [
+      {
+        "model": "kimi_k2",
+        "token": 64,
+        "run1": 168.4,
+        "run2": 184.7,
+        "drift_us": 16.4,
+        "band_us": 8.0
+      }
+    ],
+    "finding": "Under the user-approved DEC-9 regime-aware band, small-token noise is absorbed (8us floor for tokens<=64). Residual: kernel_path 1 point [('kimi_k2', 128, 6.8)] and e2e 1 point [('kimi_k2', 64, 16.4)]. The kimi_k2/128 kernel-path point was a single borderline mid-token point to be re-confirmed on the next fresh sweep -- now re-confirmed STABLE in live_remeasure_kimi_k2_a4w4."
+  }
 }

@@ -61,6 +61,28 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
+### Repeatability re-measure (RESOLVES the Kimi K2 token-128 residual) — Kimi K2 a4w4 baseline
+
+- Result: `neutral` (baseline re-measurement, not a tuning lever). Kernels are
+  unchanged from `523ca1c7` on this branch, so default-tile sweeps are a faithful
+  baseline re-measurement.
+- Scope: Kimi K2 a4w4, full 16-token grid, **kernel-path** metric. Protocol:
+  warmup=10 / iters=100, reps=3, clocks **harness-verified pinned**
+  (`clocks_pinned=True`), `idle_gpu_verified=True`, gfx950 / MI350X, commit
+  `b920522d`. Two fresh independent sweeps.
+- Result: **16/16 kernel-path points stable** under the DEC-9 band. The
+  previously-flagged **Kimi K2 token-128** point is now within band:
+  **drift 4.8µs < band 5.87µs (1.6%)** — resolved on the 2% relative term alone,
+  **no band widening**. (The prior figure, 6.8µs over a 5.8µs band, came from the
+  prior-loop CSV pair *re-scored* under DEC-9, not a fresh measurement.)
+- e2e not measured this round: the tuning target and the flagged residual are
+  kernel-path; the aiter e2e AOT cache is unpopulated in this environment, and the
+  only prior e2e residual (Kimi K2 token-64 ~16µs) is the documented guardrail
+  outlier (queued).
+- Artifacts: `docs/repeat_kimi_a4w4_run1.csv`, `docs/repeat_kimi_a4w4_run2.csv`,
+  `docs/baseline_523ca1c7_repeatability.json` (`live_remeasure_kimi_k2_a4w4`),
+  attempt in `docs/attempts.jsonl`.
+
 ### Candidate (PARTIAL DS-V3-subset small-token improvement) — DeepSeek V3 a4w4, stage1 `tile_n=128`
 
 NOTE: this is a **partial** improvement, NOT a confirmed AC-4 win and NOT AC-3.
