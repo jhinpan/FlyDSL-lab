@@ -68,26 +68,36 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
-### DS V3 a4w4 tokens 32/64 — legal stage1 tile sweep — NON-WINNING (kernel-path)
+### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 
 - Result: `loss`. AC-4's small-token criterion is **kernel-path** latency
   (`spec.is_small_token_win`: `tuned <= baseline*0.90` AND `baseline-tuned >= 2µs`).
-- Scope: DeepSeek V3 a4w4 (7168/256, E257/topk9), tokens 32 + 64, all legal stage1
-  tiles (tile_m ∈ {32,64,128} × tile_n ∈ {64,128,256}, k1=256; stage2 256/256).
+- Scope (SCOPED, not "all legal tiles"): DeepSeek V3 a4w4 (7168/256, E257/topk9),
+  tokens 32 + 64, the legal stage1 **k1=256** tile set — R9 swept the bounded
+  `tile_m∈{32,64,128} × tile_n∈{64,128,256}` grid (9 configs); R10 added the
+  remaining legal k1=256 configs (`tile_n=32`: m32/64/128; `tile_n=512`:
+  m32/64/128; `tile_m=256`: n32/64/128/256 — 11 configs). stage2 256/256.
   Protocol: kernel-path only (`--no-e2e`), reps=3, clocks harness-verified pinned,
   idle verified, via the fail-closed candidate CLI.
 - Baseline kp: t32=179.8µs, t64=203.0µs → gate needs t32≤161.8, t64≤182.7.
-- **No legal tile clears the gate.** Best balanced is stage1 `m32_n128`
-  (t32 166.4 −7.5%, t64 187.7 −7.5%); `m32_n64` is t32 166.1 −7.6% / t64 191.8
-  −5.5%. All small/mid tiles land ~−3…−7.6% (short of −10%); large tiles (m128)
-  regress hard (+38…+101%).
-- Conclusion: **stage1 tile-only tuning cannot make DS V3 32/64 an AC-4 win** — the
-  best is ~−7.5%, ~2–5µs short of the 10% gate. Routed to the AC-3/AC-4 profiling
-  + secondary-levers task (stage2 tile / xcd_swizzle / persist_m / async / split-K
-  from a profiler hypothesis). This confirms and extends the earlier `tile_n=128`
-  partial: DS V3 small-token wins remain tokens 1–16 only.
-- Artifacts: `docs/dsv3_3264_sweep/dsv3_a4w4_m{32,64,128}_n{64,128,256}.csv`
-  (9 CSVs), attempt in `docs/attempts.jsonl`.
+- **No measurable legal k1=256 stage1 tile clears the gate.** Best balanced stays
+  stage1 `m32_n128` (t32 166.4 −7.5%, t64 187.7 −7.5%). R10 added configs:
+  - tile_n=32: `m32_n32` −1.9%/−4.5%, `m64_n32` +4.4%/+2.2%, `m128_n32` +70%/+88%
+    — none wins.
+  - tile_n=512 (`m32/64/128_n512`): the harness emits an **empty kernel-path** row
+    (same class as the `tile_k1!=256` limitation — not measurable here).
+  - tile_m=256 (`m256_n{32,64,128,256}`): **illegal** — `s2=lds_over_limit`
+    (stage2 shares tile_m=256, over the gfx950 163840 B LDS), correctly rejected by
+    the fail-closed CLI and recorded as 4 rejected candidates.
+- Conclusion: **across all MEASURABLE legal k1=256 stage1 tiles, none makes DS V3
+  32/64 an AC-4 win** — best ~−7.5%, ~2–5µs short of the 10% gate. Not covered:
+  tile_k1>256 and tile_n=512 (both hit the harness empty-stage-time limitation),
+  and stage2/secondary levers. Next: the profiling pass + secondary levers (stage2
+  tile / xcd_swizzle / persist_m / async / split-K), plus a harness fix to measure
+  tile_k1>256 / tile_n=512. DS V3 small-token wins remain tokens 1–16 only.
+- Artifacts: `docs/dsv3_3264_sweep/dsv3_a4w4_m{32,64,128}_n{64,128,256}.csv` (R9, 9
+  CSVs) + `docs/dsv3_3264_sweep/r10_*.csv` (R10: tile_n=32 measured, tile_n=512
+  empty; tile_m=256 rejected); attempts + rejected records in `docs/attempts.jsonl`.
 
 ### Repeatability re-measure — TWO-METRIC (AC-1.1 MET) — Kimi K2 a4w4 baseline
 
