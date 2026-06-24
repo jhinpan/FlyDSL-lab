@@ -142,7 +142,10 @@ class Provenance:
     idle_gpu_verified: bool = False
     graph_capture: bool = spec.GRAPH_CAPTURE
     l2_flush_per_iter: bool = spec.L2_FLUSH_PER_ITER
-    clocks_pinned: bool = spec.CLOCKS_PINNED
+    # NOT proof until verified: defaults False so a row never claims pinned clocks
+    # unless the driver enabled performance determinism AND verified the state.
+    # (spec.CLOCKS_PINNED is the protocol's INTENT, not evidence.)
+    clocks_pinned: bool = False
     metric_formula: str = METRIC_FORMULA
 
     REQUIRED_FIELDS = ("gpu_id", "gpu_model", "branch", "commit", "warmup", "iters")
@@ -595,6 +598,23 @@ def clocks_pinned_state(gpu_id: str) -> bool:
     return ("determinism" in out) or ("manual" in out) or ("high" in out)
 
 
+def setup_run_provenance(gpu_id: str, assume_idle: bool = False, repo_ref: str = _REPO_ROOT) -> Provenance:
+    """Build the run Provenance with VERIFIED idle + clock-pinned state.
+
+    Enables performance determinism (pins sclk) and verifies it via
+    ``clocks_pinned_state``; ``Provenance.clocks_pinned`` reflects only the
+    verified state (never the static intent default).  Used by the live sweep so
+    every emitted row's clock provenance is trustworthy.
+    """
+    idle = True if assume_idle else check_idle_gpu(gpu_id)
+    pin_clocks(gpu_id)  # best-effort enable
+    pinned = clocks_pinned_state(gpu_id)  # verify the actual state
+    prov = Provenance(idle_gpu_verified=idle, clocks_pinned=pinned)
+    prov.__dict__.update(git_provenance(repo_ref))
+    prov.__dict__.update(gpu_provenance(gpu_id))
+    return prov
+
+
 def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
     """FlyDSL per-stage benchmark command for one point under the locked protocol."""
     in_dtype = "fp4" if rp.dtype == "a4w4" else "a8w4"
@@ -829,6 +849,11 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
     ap.add_argument("--csv", default="", help="CSV to validate (validate mode)")
     ap.add_argument("--no-e2e", action="store_true", help="skip the aiter e2e/correctness run")
     ap.add_argument("--assume-idle", action="store_true", help="skip the live idle-GPU probe")
+    ap.add_argument(
+        "--allow-unpinned",
+        action="store_true",
+        help="proceed (recording clocks_pinned=False) even if clock pinning cannot be verified",
+    )
     args = ap.parse_args(argv)
 
     if args.mode == "list":
@@ -841,10 +866,18 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         print(json.dumps(res, indent=2))
         return 0 if res["valid"] else 1
 
-    idle = True if args.assume_idle else check_idle_gpu(args.gpu)
-    prov = Provenance(idle_gpu_verified=idle)
-    prov.__dict__.update(git_provenance())
-    prov.__dict__.update(gpu_provenance(args.gpu))
+    prov = setup_run_provenance(args.gpu, assume_idle=args.assume_idle)
+    print(f"clocks_pinned (verified)={prov.clocks_pinned} idle_gpu_verified={prov.idle_gpu_verified}")
+    # The locked protocol requires fixed clocks: if verification failed, do not
+    # emit a baseline that falsely claims pinned clocks.
+    if spec.CLOCKS_PINNED and not prov.clocks_pinned and not args.allow_unpinned:
+        print(
+            "ERROR: locked protocol requires pinned clocks but verification failed; "
+            "the run would be non-comparable. Re-run with the GPU clocks pinnable, "
+            "or pass --allow-unpinned to record clocks_pinned=False explicitly.",
+            file=sys.stderr,
+        )
+        return 2
 
     rows = []
     for rp in build_run_list():
@@ -872,6 +905,9 @@ __all__ = [
     "git_provenance",
     "gpu_provenance",
     "check_idle_gpu",
+    "pin_clocks",
+    "clocks_pinned_state",
+    "setup_run_provenance",
     "build_run_list",
     "expected_point_keys",
     "validate_baseline_row",

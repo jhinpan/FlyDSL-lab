@@ -314,7 +314,9 @@ def test_validate_baseline_row_rejections(over, expect):
 def test_validate_baseline_csv_missing_coverage(tmp_path):
     # A single fully-valid row is not enough; the full workload must be covered.
     out = tmp_path / "baseline.csv"
-    p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
+    p = harness.Provenance(
+        gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True, clocks_pinned=True
+    )
     row = harness.PointRow(
         provenance=p,
         command="cmd",
@@ -349,7 +351,9 @@ def test_validate_baseline_csv_rejects_missing_kernel_metrics(tmp_path):
     # Regression: a full-coverage CSV with e2e/logits present
     # but kernel metrics empty must NOT validate.
     out = tmp_path / "baseline.csv"
-    p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
+    p = harness.Provenance(
+        gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True, clocks_pinned=True
+    )
     rows = []
     for rp in harness.build_run_list():
         rows.append(
@@ -783,7 +787,9 @@ def test_validate_baseline_csv_subset_keys(tmp_path):
     from kernels import moe_tuning_spec as spec
 
     out = tmp_path / "sub.csv"
-    p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
+    p = harness.Provenance(
+        gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True, clocks_pinned=True
+    )
     rows = []
     for key in spec.validated_point_keys():
         model, dtype, act, token = key
@@ -884,3 +890,63 @@ def test_clock_pinning_helpers(monkeypatch):
     assert harness.clocks_pinned_state("0") is True
     outs["level"] = "GPU[0]: Performance Level: auto"
     assert harness.clocks_pinned_state("0") is False
+
+
+def test_setup_run_provenance_reflects_verified_clock_state(monkeypatch):
+    # The live setup path must record the VERIFIED clock-pinned state, never the
+    # static spec intent default. Provenance.clocks_pinned defaults to False.
+    assert harness.Provenance().clocks_pinned is False
+
+    calls = {"pin": 0}
+
+    def fake_pin(gpu_id, *a, **k):
+        calls["pin"] += 1
+        return True
+
+    monkeypatch.setattr(harness, "check_idle_gpu", lambda g, **k: True)
+    monkeypatch.setattr(harness, "pin_clocks", fake_pin)
+    monkeypatch.setattr(harness, "git_provenance", lambda *a, **k: {"branch": "b", "commit": "523ca1c7"})
+    monkeypatch.setattr(harness, "gpu_provenance", lambda g: {"gpu_id": str(g), "gpu_model": "MI350X"})
+
+    # Verified pinned -> clocks_pinned True.
+    monkeypatch.setattr(harness, "clocks_pinned_state", lambda g: True)
+    prov = harness.setup_run_provenance("0")
+    assert calls["pin"] == 1  # the driver actually attempted to pin
+    assert prov.clocks_pinned is True
+    assert prov.idle_gpu_verified is True
+    assert prov.commit == "523ca1c7" and prov.gpu_model == "MI350X"
+
+    # Verification fails -> clocks_pinned MUST be False (not the intent default).
+    monkeypatch.setattr(harness, "clocks_pinned_state", lambda g: False)
+    prov2 = harness.setup_run_provenance("0")
+    assert prov2.clocks_pinned is False
+    # A row built from unverified provenance is rejected by the baseline validator.
+    row = {
+        "commit": "523ca1c7",
+        "idle_gpu_verified": "True",
+        "gpu_id": "0",
+        "gpu_model": "MI350X",
+        "branch": "b",
+        "command": "c",
+        "dtype": "a4w4",
+        "act": "silu",
+        "model": "kimi_k2",
+        "token": "16",
+        "stage1_us": "1",
+        "stage2_us": "1",
+        "sorting_us": "0",
+        "kernel_path_us": "2",
+        "kernel_path_us_p95": "2",
+        "effective_tflops": "1",
+        "mfu": "0.1",
+        "e2e_us": "1",
+        "e2e_us_p95": "1",
+        "logits_diff": "0.0001",
+        "correctness_pass": "True",
+        "warmup": "10",
+        "iters": "100",
+        "graph_capture": "False",
+        "l2_flush_per_iter": "True",
+        "clocks_pinned": str(prov2.clocks_pinned),
+    }
+    assert "clocks_must_be_pinned" in harness.validate_baseline_row(row)

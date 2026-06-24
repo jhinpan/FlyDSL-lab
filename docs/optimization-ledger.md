@@ -75,18 +75,21 @@ file is the human-facing running log.
     0 missing, 0 errors**. This is the validated reference for the in-scope a4w4 set.
   - `docs/baseline_523ca1c7_validated_run2.csv` +
     `docs/baseline_523ca1c7_repeatability.json` — two independent sweeps under the
-    faithful L2-flush rotated protocol at reps=3 WITH CLOCKS PINNED (performance
-    determinism, sclk 2200MHz via `rocm-smi --setperfdeterminism`). Pinning
-    materially improved e2e (6/40 -> 2/40 unstable) but kernel-path remains 6/40
-    unstable at SMALL TOKENS (1-32), worst ~5.3us, under the locked `max(2%, 2us)`
-    band. All instability is at tokens<=32 where absolute kernel-path us is
-    127-183us, so the 2us floor is ~1.1-1.6% — below normal launch/host jitter
-    (~3-5us). In-protocol levers are EXHAUSTED (faithful L2-flush rotation, reps=3,
-    AND actual clock pinning). Floor sensitivity: 2us->6/2 unstable, 3us->5/0,
-    5us->1/0, 6us->0/0. **OPEN USER PROTOCOL DECISION:** widen the small-token
-    (tokens<=64) repeatability/no-regression absolute band (a ~6us floor makes
-    both metrics fully stable and is still far below the DEC-1 small-token win
-    threshold of >=2us absolute AND >=10%), or keep 2us. Not self-approved.
+    faithful L2-flush rotated protocol at reps=3 with clocks HARNESS-VERIFIED
+    pinned (`setup_run_provenance` calls `pin_clocks` + `clocks_pinned_state`;
+    `clocks_pinned=True` is now trustworthy, not a static default). Under the
+    locked `max(2%, 2us)` band, residual instability stays confined to SMALL
+    TOKENS (1-32): kernel-path 9/40, e2e 7/40 (the exact count varies run-to-run
+    — small-token jitter is stochastic — but is always nonzero and always
+    small-token). Absolute kernel-path us there is 127-183us, so the 2us floor is
+    ~1.1-1.6% — below the ~3-5us launch/host jitter. In-protocol levers are
+    EXHAUSTED (faithful L2-flush rotation, reps=3, AND harness-verified clock
+    pinning). Floor sensitivity (this pair): 2us->9/7 unstable, 3us->8/5, 5us->3/3,
+    6us->1/2. **OPEN USER PROTOCOL DECISION:** widen the small-token (tokens<=64)
+    repeatability/no-regression absolute band (a ~6us+ floor substantially reduces
+    instability and stays far below the DEC-1 small-token win threshold of >=2us
+    absolute AND >=10%), or keep 2us and accept tiny-token points are
+    non-comparable on this node. Not self-approved.
   - `docs/baseline_523ca1c7.csv` — honest full 96-point record (40 a4w4 pass + 56
     a8w4 via the strict path, `correctness_pass=False`). Default
     `validate_baseline_csv` fails ONLY on the a8w4 correctness rows, 0 missing.
