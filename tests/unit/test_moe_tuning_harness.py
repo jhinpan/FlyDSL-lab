@@ -721,8 +721,14 @@ def test_scan_duplicate_rejected_candidates(tmp_path):
 
     def _probe(ts, sup=None):
         r = {
-            "result": "rejected_candidate", "model": "deepseek_v3", "dtype": "a4w4", "act": "silu",
-            "token": 32, "config": {"tile_m1": 256, "tile_n1": 32}, "reason": "x", "timestamp": ts,
+            "result": "rejected_candidate",
+            "model": "deepseek_v3",
+            "dtype": "a4w4",
+            "act": "silu",
+            "token": 32,
+            "config": {"tile_m1": 256, "tile_n1": 32},
+            "reason": "x",
+            "timestamp": ts,
         }
         if sup is not None:
             r["superseded_by"] = sup
@@ -747,13 +753,67 @@ def test_committed_rejected_candidates_unique():
     assert dups == [], f"duplicate active rejected-candidate records: {dups}"
 
 
+def test_scan_superseded_rejected_candidates(tmp_path):
+    path = str(tmp_path / "attempts.jsonl")
+    import json as _json
+
+    def _probe(ts, n, sup=None):
+        r = {
+            "result": "rejected_candidate",
+            "model": "deepseek_v3",
+            "dtype": "a4w4",
+            "act": "silu",
+            "token": 32,
+            "config": {"tile_m1": 256, "tile_n1": n},
+            "reason": "x",
+            "timestamp": ts,
+        }
+        if sup is not None:
+            r["superseded_by"] = sup
+        return r
+
+    # superseded record links to the matching active record of the SAME key -> clean.
+    open(path, "w").write(_json.dumps(_probe(1.0, 32, sup=2.0)) + "\n" + _json.dumps(_probe(2.0, 32)) + "\n")
+    assert ledger.scan_superseded_rejected_candidates(path) == []
+
+    # superseded record links to a DIFFERENT probe's active record -> offender.
+    open(path, "w").write(
+        _json.dumps(_probe(1.0, 32, sup=3.0))  # links to the n=64 record, wrong key
+        + "\n"
+        + _json.dumps(_probe(2.0, 32))
+        + "\n"
+        + _json.dumps(_probe(3.0, 64))
+        + "\n"
+    )
+    off = ledger.scan_superseded_rejected_candidates(path)
+    assert off and off[0][0] == 1.0
+
+
+def test_committed_superseded_links_valid():
+    """Every committed superseded rejected record must link to an active record of the same key."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    off = ledger.scan_superseded_rejected_candidates(attempts)
+    assert off == [], f"superseded records linking to the wrong/no successor: {off}"
+
+
 def test_row_missing_kernel_path():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
     # A row with no parsed stage times is "missing" (the tile_n=512 / tile_k!=256 case).
-    blank = harness.PointRow(provenance=prov, command="x", model=rp.model, model_dim=rp.model_dim,
-                             inter_dim=rp.inter_dim, experts=rp.experts, topk=rp.topk, dtype=rp.dtype,
-                             act=rp.act, token=rp.token)
+    blank = harness.PointRow(
+        provenance=prov,
+        command="x",
+        model=rp.model,
+        model_dim=rp.model_dim,
+        inter_dim=rp.inter_dim,
+        experts=rp.experts,
+        topk=rp.topk,
+        dtype=rp.dtype,
+        act=rp.act,
+        token=rp.token,
+    )
     assert harness.row_missing_kernel_path(blank) is True
     # A row with kernel-path populated is not missing.
     blank.stage1_us = 90.0

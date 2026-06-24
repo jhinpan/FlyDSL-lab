@@ -446,6 +446,42 @@ def scan_duplicate_rejected_candidates(path: str = ATTEMPTS_JSONL) -> List[Tuple
     return [(k, ts) for k, ts in seen.items() if len(ts) > 1]
 
 
+def scan_superseded_rejected_candidates(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
+    """Find superseded rejected records that do NOT link to a matching successor.
+
+    Every ``rejected_candidate`` carrying ``superseded_by`` must point at the
+    timestamp of an EXISTING active (non-superseded) rejected record for the SAME
+    rejected key ``(model,dtype,act,token,config)``.  A supersede link to a
+    different probe's record (or to no record) is an evidence-integrity defect:
+    ``scan_duplicate_rejected_candidates`` only proves one active record per key, it
+    does not prove the superseded chain points to the correct successor.  Returns a
+    list of ``(timestamp, reason)`` for offending records (empty == clean).
+    """
+    if not os.path.exists(path):
+        return []
+    active_ts_by_key: Dict[Tuple, set] = {}
+    superseded: List[dict] = []
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if rec.get("result") != "rejected_candidate":
+                continue
+            if "superseded_by" in rec:
+                superseded.append(rec)
+            else:
+                active_ts_by_key.setdefault(_rejected_key(rec), set()).add(rec.get("timestamp"))
+    offenders: List[Tuple] = []
+    for rec in superseded:
+        key = _rejected_key(rec)
+        target = rec.get("superseded_by")
+        if target not in active_ts_by_key.get(key, set()):
+            offenders.append((rec.get("timestamp"), f"superseded_by={target} is not an active record of the same key"))
+    return offenders
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
@@ -458,6 +494,7 @@ __all__ = [
     "selected_candidate_gate",
     "scan_replay_consistency",
     "scan_duplicate_rejected_candidates",
+    "scan_superseded_rejected_candidates",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
