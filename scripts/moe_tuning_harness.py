@@ -696,9 +696,12 @@ def run_point(
     """
     flydsl_cmd = _flydsl_cmd(rp, gpu_id, tile)
     aiter_cmd = _aiter_cmd(rp)
-    command = " ".join(flydsl_cmd) + " ; " + " ".join(aiter_cmd)
-    # The FlyDSL benchmark must emit its true per-iteration distribution.
+    # The FlyDSL benchmark must emit its true per-iteration distribution; the env
+    # is part of the reproducible command provenance (a replay must set it too).
     flydsl_env = {"FLYDSL_PERF_DIST": "1"}
+    env_prefix = f"HIP_VISIBLE_DEVICES={gpu_id} FLYDSL_PERF_DIST=1 "
+    flydsl_command_str = env_prefix + " ".join(flydsl_cmd)
+    command = flydsl_command_str + " ; " + f"HIP_VISIBLE_DEVICES={gpu_id} " + " ".join(aiter_cmd)
 
     s1_samples, s2_samples, sort_samples, combined_samples = [], [], [], []
     s1_p95s, s2_p95s = [], []
@@ -752,7 +755,7 @@ def run_point(
         tile_m2=tile["tile_m1"],
         tile_n2=tile["tile_n2"],
         tile_k2=tile["tile_k2"],
-        flydsl_command=" ".join(flydsl_cmd),
+        flydsl_command=flydsl_command_str,
         strict_error=strict_error,
         error_category=error_category,
         aot_status=aot_status,

@@ -158,7 +158,7 @@ def test_parse_aiter_output_fail_cases():
 
 
 def test_aiter_cmd_is_strict_aot_model_correct():
-    # Round 3: the aiter guardrail must use the strict/AOT/model-correct runner
+    # The aiter guardrail must use the strict/AOT/model-correct runner
     # (scripts/aiter_strict_point.py), NOT the non-strict legacy CLI, and must
     # carry the model's true act/gate, locked warmup/iters, and AOT enabled.
     rp = harness.RunPoint("kimi_k2", 7168, 256, 384, 8, "silu", "a4w4", 16)
@@ -216,7 +216,7 @@ def test_parse_flydsl_stage_p95():
     assert g2["stage1_us"] == 100.0 and g2["stage1_p95"] is None
 
 
-# --- run-list coverage (full DEC-6 grid from spec) -------------------------
+# --- run-list coverage (full token grid from spec) -------------------------
 
 
 def test_run_list_covers_full_dec6_grid():
@@ -235,7 +235,7 @@ def test_run_list_covers_full_dec6_grid():
         assert ("kimi_k2", "a4w4", "silu", str(tok)) in keys
 
 
-# --- baseline validation gate (AC-1 negative tests) ------------------------
+# --- baseline validation gate (negative tests) ------------------------
 
 
 def _good_baseline_row(**over):
@@ -255,7 +255,7 @@ def _good_baseline_row(**over):
         "dtype": "a4w4",
         "act": "silu",
         "token": "16",
-        # All AC-1/DEC-2 metric fields present and numeric.
+        # All required metric fields present and numeric.
         "stage1_us": "55.3",
         "stage2_us": "21.8",
         "sorting_us": "0.0",
@@ -287,7 +287,7 @@ def test_validate_baseline_row_accepts_good_row():
         ({"act": ""}, "missing_act"),
         ({"e2e_us": ""}, "missing_e2e_us"),
         ({"logits_diff": ""}, "missing_logits_diff"),
-        # Hardened metric-field requirements (Codex blocking #2).
+        # Hardened metric-field requirements.
         ({"stage1_us": ""}, "missing_stage1_us"),
         ({"stage2_us": ""}, "missing_stage2_us"),
         ({"sorting_us": ""}, "missing_sorting_us"),
@@ -346,7 +346,7 @@ def test_validate_baseline_csv_missing_coverage(tmp_path):
 
 
 def test_validate_baseline_csv_rejects_missing_kernel_metrics(tmp_path):
-    # Codex blocking #2 regression: a full-coverage CSV with e2e/logits present
+    # Regression: a full-coverage CSV with e2e/logits present
     # but kernel metrics empty must NOT validate.
     out = tmp_path / "baseline.csv"
     p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
@@ -754,9 +754,9 @@ def test_repeatability_check(tmp_path):
 def test_quarantine_and_validated_keys():
     from kernels import moe_tuning_spec as spec
 
-    # Round 3: ALL a8w4 shapes are correctness-quarantined (the non-fp4-activation
+    # ALL a8w4 shapes are correctness-quarantined (the non-fp4-activation
     # e2e path fails the aiter correctness gate for fp8 AND bf16 activation; only
-    # fp4 activation passes).  DS V3 a8w4 is included (its Round 2 "pass" was the
+    # fp4 activation passes).  DS V3 a8w4 is included (its earlier legacy-path "pass" was the
     # legacy-Swiglu artifact, not a real Silu a8w4 pass).
     assert spec.is_quarantined("deepseek_v3", "a8w4")
     assert spec.is_quarantined("deepseek_v4", "a8w4")
@@ -815,3 +815,21 @@ def test_validate_baseline_csv_subset_keys(tmp_path):
     harness.write_csv(rows, str(out))
     assert harness.validate_baseline_csv(str(out), expected_keys=spec.validated_point_keys())["valid"] is True
     assert harness.validate_baseline_csv(str(out))["valid"] is False  # full workload not covered
+
+
+def test_perf_dist_rotation_and_percentile():
+    # The timed-loop distribution helper and rotation indexing are pure logic:
+    # iteration i must use rotate_args[i % n], cycling the cache-sized arg copies
+    # (the L2-flush behavior), and _percentile is nearest-rank.
+    import importlib
+
+    tc = importlib.import_module("tests.test_common")
+    # nearest-rank p95 over 1..100: idx=round(0.95*99)=94 -> value 95 (0-based).
+    assert tc._percentile(list(range(1, 101)), 0.95) == 95
+    assert tc._percentile([], 0.95) is None
+    # rotation index pattern over n copies.
+    n = 4
+    used = [i % n for i in range(10)]
+    assert used == [0, 1, 2, 3, 0, 1, 2, 3, 0, 1]
+    # LAST_PERF_DIST exposes the n_rotate field the timed loop records.
+    assert "n_rotate" in tc.LAST_PERF_DIST

@@ -19,11 +19,11 @@ note). Categories: `correctness` = strict accuracy assertion (logits ~0.98);
 | model | token | category | error |
 |---|---|---|---|
 | deepseek_v3 | 1 | runtime | RuntimeError: Unsupported scales/output dtype! |
-| deepseek_v3 | 16 | correctness | AssertionError: accuracy check failed: checkAllclose err=0.9969395399093628, logits_diff=0 |
+| deepseek_v3 | 16 | correctness | AssertionError: accuracy check failed: checkAllclose err=0.9967564344406128, logits_diff=0 |
 | deepseek_v4 | 1 | runtime | RuntimeError: Unsupported scales/output dtype! |
-| deepseek_v4 | 16 | correctness | AssertionError: accuracy check failed: checkAllclose err=0.9969221353530884, logits_diff=1 |
+| deepseek_v4 | 16 | correctness | AssertionError: accuracy check failed: checkAllclose err=0.996712863445282, logits_diff=0. |
 | kimi_k2 | 1 | runtime | RuntimeError: Unsupported scales/output dtype! |
-| kimi_k2 | 16 | correctness | AssertionError: accuracy check failed: checkAllclose err=0.9965384602546692, logits_diff=0 |
+| kimi_k2 | 16 | correctness | AssertionError: accuracy check failed: checkAllclose err=0.996957004070282, logits_diff=0. |
 | gpt_oss | 256 | pass |  |
 | gpt_oss | 512 | correctness | AssertionError: accuracy check failed: checkAllclose err=0.9967130422592163, logits_diff=0 |
 | gpt_oss | 4096 | runtime | TypeError: __init__(): incompatible function arguments. The following argument types are s |

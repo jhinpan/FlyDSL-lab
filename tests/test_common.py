@@ -24,7 +24,7 @@ pd.set_option("display.max_rows", 200)
 # populated only when FLYDSL_PERF_DIST is set.  Lets callers report a true
 # timed-loop median+p95 over num_iters without changing the (data, avg) return
 # signature shared by every other caller.
-LAST_PERF_DIST = {"median": None, "p95": None}
+LAST_PERF_DIST = {"median": None, "p95": None, "n_rotate": None}
 
 
 def _percentile(sorted_vals, q):
@@ -64,17 +64,26 @@ def perftest(num_iters=20, num_warmup=3, testGraph=False, num_rotate_args=0, nee
             # num_iters, recorded in LAST_PERF_DIST.  Opt-in via FLYDSL_PERF_DIST so
             # the default profiler/event path is unchanged.  Returns the MEDIAN as
             # the central-tendency `avg` so the reported us is the median.
+            #
+            # Cycles through the SAME ``rotate_args`` set the default path uses
+            # (``num`` cache-sized argument copies), so each iteration touches a
+            # different working set -- this is the L2-flush behavior the recorded
+            # protocol claims (l2_flush_per_iter=True), not a hot-cache reuse of one
+            # tensor set.  LAST_PERF_DIST["n_rotate"] records how many copies cycled.
             if int(os.environ.get("FLYDSL_PERF_DIST", 0)):
                 latencies = []
                 start_event = torch.cuda.Event(enable_timing=True)
                 end_event = torch.cuda.Event(enable_timing=True)
-                for _ in range(num_iters):
+                n_rot = len(rotate_args)
+                for i in range(num_iters):
+                    a_i, kw_i = rotate_args[i % n_rot]
                     start_event.record()
-                    data = func(*args, **kwargs)
+                    data = func(*a_i, **kw_i)
                     end_event.record()
                     end_event.synchronize()
                     latencies.append(start_event.elapsed_time(end_event) * 1000.0)  # ms -> us
                 torch.cuda.synchronize()
+                LAST_PERF_DIST["n_rotate"] = n_rot
                 ordered = sorted(latencies)
                 median = (
                     ordered[len(ordered) // 2]
