@@ -8,11 +8,20 @@ file is the human-facing running log.
 ## Reference
 
 - Locked baseline ref: `upstream/main` @ `523ca1c7`, built in an isolated
-  worktree and measured on a fixed idle MI350X (gfx950). Kernel-path metrics are
-  recorded in `docs/baseline_523ca1c7_kernelpath.csv`. The full fused-MoE e2e
-  guardrail column is pending an aiter harness env fix (see goal-tracker blocking
-  issue); a win cannot be claimed until the e2e + strict-correctness columns are
-  present and validated.
+  worktree and measured on a fixed idle MI350X (gfx950). The **validated** locked
+  baseline is `docs/baseline_523ca1c7_validated.csv` — the 40 a4w4 points (DS V3,
+  Kimi K2, GPT-OSS), measured via the strict/AOT/model-correct aiter guardrail
+  (`scripts/aiter_strict_point.py`: `strict_accuracy=True`, AOT cache check, true
+  per-model activation/gate, warmup=10/iters=100). It passes
+  `validate_baseline_csv(expected_keys=validated_point_keys())` with all
+  `correctness_pass=True`. **a8w4 (fp8×fp4) is correctness-BLOCKED** for all four
+  models: under the strict path the non-fp4-activation e2e path fails the
+  correctness gate (fp8 a8w4 AND bf16 a16w4 → `logits_diff ≈ 0.98`; only fp4
+  activation passes). Root cause is an aiter-wrapper/layout contract mismatch for
+  non-fp4 activation (NOT a FlyDSL kernel bug — this checkout's own
+  `tests/kernels/test_moe_gemm.py --in_dtype a8w4` passes); fixing it is
+  aiter-environment work outside the GEMM-tuning scope. a8w4 is quarantined
+  pending a user scope decision — no a8w4 win may be claimed until it is green.
 - fp4 peak (MFU denominator): **4523 TFLOPS** (empirical ceiling on this node).
 - Metric formula: `effective_tflops = token*model_dim*inter_dim*3*topk*2 / combined_us / 1e6`;
   `mfu = effective_tflops / 4523`. Combined kernel-path us = stage1 + stage2 + sorting.

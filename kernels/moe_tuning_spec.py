@@ -24,15 +24,15 @@ from typing import Tuple
 # sclk max 2200 MHz).  MFU = effective_TFLOPS / FP4_PEAK_TFLOPS.
 FP4_PEAK_TFLOPS = 4523.0
 
-# --- Win margins (DEC-1) ---------------------------------------------------
+# --- Win margins (the win-margin policy) ---------------------------------------------------
 WIN_MARGIN = 0.10  # 10% relative improvement required to claim a win.
 # Large-shape (tokens >= LARGE_TOKEN_MIN): tuned_MFU >= baseline_MFU * (1 + WIN_MARGIN).
 # Small-token (tokens <= SMALL_TOKEN_MAX): tuned_us <= baseline_us * (1 - WIN_MARGIN)
 #   AND (baseline_us - tuned_us) >= ABS_US_BAND.
 
-# --- No-regression tolerance + protocol (DEC-2) ----------------------------
+# --- No-regression tolerance + protocol (the no-regression policy) ----------------------------
 REGRESSION_REL = 0.02  # 2% relative.
-ABS_US_BAND = 2.0  # microseconds; also the DEC-1 small-token absolute floor.
+ABS_US_BAND = 2.0  # microseconds; also the the win-margin policy small-token absolute floor.
 
 WARMUP_ITERS = 10
 BENCH_ITERS = 100
@@ -44,13 +44,13 @@ GRAPH_CAPTURE = False
 L2_FLUSH_PER_ITER = True
 CLOCKS_PINNED = True
 
-# --- Token regimes (DEC-1 / DEC-3) -----------------------------------------
+# --- Token regimes (the win-margin policy / the target-bucket policy) -----------------------------------------
 LARGE_TOKEN_MIN = 4096  # MFU regime.
 SMALL_TOKEN_MAX = 64  # latency regime.
-# Predeclared MFU target buckets (DEC-3): the two largest in-sweep tokens.
+# Predeclared MFU target buckets (the target-bucket policy): the two largest in-sweep tokens.
 MFU_TARGET_BUCKETS: Tuple[int, ...] = (16384, 32768)
 
-# --- Token grids (DEC-6) ---------------------------------------------------
+# --- Token grids (the token-grid policy) ---------------------------------------------------
 TOKEN_GRID_FULL: Tuple[int, ...] = (
     1,
     2,
@@ -71,7 +71,7 @@ TOKEN_GRID_FULL: Tuple[int, ...] = (
 )
 TOKEN_GRID_GPTOSS: Tuple[int, ...] = (256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
 
-# --- Routing distributions for correctness (DEC-7) -------------------------
+# --- Routing distributions for correctness (the routing-distribution policy) -------------------------
 ROUTING_DISTRIBUTIONS: Tuple[str, ...] = (
     "default",
     "uniform",
@@ -81,7 +81,7 @@ ROUTING_DISTRIBUTIONS: Tuple[str, ...] = (
     "sentinel_padding",
 )
 
-# --- Node environment (DEC-8) ----------------------------------------------
+# --- Node environment (the node/shape policy) ----------------------------------------------
 TARGET_ARCH = "gfx950"
 
 
@@ -91,7 +91,7 @@ class ModelShape:
 
     ``dtypes`` are the activation x weight quant aliases in scope for this loop:
     ``"a4w4"`` (fp4 x fp4) and/or ``"a8w4"`` (fp8 x fp4).  ``i4`` is out of scope.
-    ``token_grid`` is the sweep used for this model (DEC-6).
+    ``token_grid`` is the sweep used for this model (the token-grid policy).
     """
 
     name: str
@@ -104,7 +104,7 @@ class ModelShape:
     token_grid: Tuple[int, ...]
 
 
-# The four target models (DEC-8 + plan workload table).  DeepSeek V4 is a8w4
+# The four target models (the node/shape policy + plan workload table).  DeepSeek V4 is a8w4
 # only; i4 (Kimi a16wi4) is excluded from this loop.
 MODELS: Tuple[ModelShape, ...] = (
     ModelShape("deepseek_v3", 7168, 256, 257, 9, "silu", ("a4w4", "a8w4"), TOKEN_GRID_FULL),
@@ -117,22 +117,36 @@ MODELS: Tuple[ModelShape, ...] = (
 # (the weight operand is fp4 in both in-scope cases).
 DTYPE_ALIAS_TO_A_DTYPE = {"a4w4": "fp4", "a8w4": "fp8"}
 
-# --- Correctness quarantine (Round 2 finding) ------------------------------
-# The aiter op_tests/test_moe_2stage.py *legacy CLI* path hardcodes
-# ActivationType.Swiglu and GateMode.INTERLEAVE for the per_1x32 fp8xfp4 (a8w4)
-# case (test_moe_2stage.py:_iter_legacy_cases ~line 758 and _effective_gate_mode),
-# ignoring the model's true activation.  Measuring Silu models (DeepSeek V4,
-# Kimi K2) through that path therefore compares a Swiglu+interleave kernel against
-# a Silu reference and yields logits_diff ~= 0.99 (near-total mismatch).  GPT-OSS
-# (genuinely Swiglu) also fails a8w4 at >=512 tokens and crashes/OOM at large
-# shapes.  This is a harness-path artifact, NOT a demonstrated FlyDSL kernel bug:
-# a4w4 passes everywhere and DeepSeek V3 a8w4 passes through the same harness.
+# --- Correctness quarantine (non-fp4-activation e2e is environment-blocked) ---
+# Controlled evidence (direct aiter test_fmoe, each model's true activation, both
+# gate modes, token=16) shows the failing axis is the ACTIVATION operand being
+# non-fp4:
+#   a4w4  (fp4 activation):  logits_diff ~1e-5  -> PASS (all models, both gates)
+#   a8w4  (fp8 activation):  logits_diff ~0.98  -> FAIL (DS V3/V4, Kimi; both gates)
+#   a16w4 (bf16 activation): logits_diff ~0.98  -> FAIL (DS V3; both gates)
+#   GPT-OSS a8w4 Swiglu+INTERLEAVE: ~6e-6       -> PASS (lone non-fp4-act pass;
+#     aiter selects a different runtime q_dtype_a/fuse-quant path there)
+# fp8 AND bf16 activation both fail with fp4 weight; only fp4 activation passes.
+# Note: aiter test_fmoe passes the SAME activation/gate to BOTH its torch
+# reference and the kernel, so the activation choice alone cannot explain the
+# mismatch.
 #
-# Until the a8w4 correctness path is validated via aiter's model-CSV mode (which
-# encodes the correct ActivationType per model), these (model, dtype) pairs are
-# QUARANTINED: their baseline rows are kept for provenance but excluded from the
-# validated baseline and from any win claim.
+# Root cause is an activation-dtype-dependent wrapper/layout CONTRACT mismatch in
+# the aiter e2e path, NOT a proven FlyDSL kernel math bug -- this checkout's own
+# tests/kernels/test_moe_gemm.py --in_dtype a8w4 passes with --skip_ref false.
+# For non-fp4 activation aiter preps weights via shuffle_weight_a16w4 /
+# shuffle_scale_a16w4 and its reference sets a2_scale=None (no stage1->stage2 A2
+# requant), while the FlyDSL mixed stage2 kernel expects a pre-scattered A2 E8M0
+# scale (mixed_moe_gemm_2stage.py); this checkout's own 2-stage harness does
+# requantize A2 and passes.  Reconciling this is aiter-environment integration
+# work, outside the GEMM-tuning scope.
+#
+# All a8w4 (model, dtype) pairs are therefore QUARANTINED until the e2e a8w4
+# correctness path is validated.  Their rows are kept for provenance but excluded
+# from the validated baseline and from any win claim -- a genuine correctness
+# block, not a silent scope reduction.
 QUARANTINED_SHAPES: Tuple[Tuple[str, str], ...] = (
+    ("deepseek_v3", "a8w4"),
     ("deepseek_v4", "a8w4"),
     ("kimi_k2", "a8w4"),
     ("gpt_oss", "a8w4"),
@@ -176,7 +190,7 @@ def is_small_token(token: int) -> bool:
 
 
 def is_regression(baseline_us: float, tuned_us: float) -> bool:
-    """No-regression gate (DEC-2): regression iff BOTH the relative AND absolute
+    """No-regression gate (the no-regression policy): regression iff BOTH the relative AND absolute
     bands are exceeded — ``tuned > baseline*1.02`` AND ``tuned-baseline > 2us``.
 
     Applied per point on BOTH the kernel-path and e2e metrics; a point is a
@@ -186,12 +200,12 @@ def is_regression(baseline_us: float, tuned_us: float) -> bool:
 
 
 def is_large_shape_win(baseline_mfu: float, tuned_mfu: float) -> bool:
-    """Large-shape win gate (DEC-1): ``tuned_MFU >= baseline_MFU * 1.10``."""
+    """Large-shape win gate (the win-margin policy): ``tuned_MFU >= baseline_MFU * 1.10``."""
     return tuned_mfu >= baseline_mfu * (1.0 + WIN_MARGIN)
 
 
 def is_small_token_win(baseline_us: float, tuned_us: float) -> bool:
-    """Small-token win gate (DEC-1): both a relative and an absolute floor —
+    """Small-token win gate (the win-margin policy): both a relative and an absolute floor —
     ``tuned_us <= baseline_us*0.90`` AND ``(baseline_us - tuned_us) >= 2us``.
 
     The absolute floor rejects sub-microsecond percentage-only claims.

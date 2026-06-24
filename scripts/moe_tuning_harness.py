@@ -137,7 +137,7 @@ class Provenance:
     REQUIRED_FIELDS = ("gpu_id", "gpu_model", "branch", "commit", "warmup", "iters")
 
     def missing_fields(self) -> List[str]:
-        """Required provenance fields that are empty/unset (AC-1 negative gate)."""
+        """Required provenance fields that are empty/unset (the baseline contract negative gate)."""
         missing = []
         for f in self.REQUIRED_FIELDS:
             v = getattr(self, f)
@@ -280,6 +280,32 @@ def parse_aiter_output(stdout: str) -> dict:
     return {"e2e_us": e2e_us, "logits_diff": logits_diff, "correctness_pass": correctness_pass}
 
 
+def parse_strict_aiter_output(stdout: str) -> dict:
+    """Parse the ``STRICT_RESULT {json}`` line from ``scripts/aiter_strict_point.py``.
+
+    Returns ``{"e2e_us", "logits_diff", "correctness_pass", "error"}``.  The strict
+    runner already applies ``strict_accuracy=True`` + ``logits_diff <= 0.01``, so
+    ``correctness_pass`` is authoritative; an AOT miss or strict assertion is
+    reported as ``error`` with ``correctness_pass=False``.
+    """
+    line = None
+    for ln in stdout.splitlines():
+        if ln.startswith("STRICT_RESULT "):
+            line = ln[len("STRICT_RESULT ") :]
+    if line is None:
+        return {"e2e_us": None, "logits_diff": None, "correctness_pass": False, "error": "no_strict_result"}
+    try:
+        d = json.loads(line)
+    except json.JSONDecodeError:
+        return {"e2e_us": None, "logits_diff": None, "correctness_pass": False, "error": "bad_strict_json"}
+    return {
+        "e2e_us": d.get("e2e_us"),
+        "logits_diff": d.get("logits_diff"),
+        "correctness_pass": bool(d.get("correctness_pass")),
+        "error": d.get("error", ""),
+    }
+
+
 def combined_kernel_path_us(stage1_us: float, stage2_us: float, sorting_us: float = 0.0) -> float:
     """Combined kernel-path latency = stage1 + stage2 + sorting (microseconds)."""
     return float(stage1_us) + float(stage2_us) + float(sorting_us)
@@ -346,7 +372,7 @@ def read_csv(path: str) -> List[dict]:
         return list(csv.DictReader(f))
 
 
-# --- workload run list (full DEC-6 coverage from the spec) ------------------
+# --- workload run list (full the token-grid policy coverage from the spec) ------------------
 
 
 @dataclass(frozen=True)
@@ -364,10 +390,10 @@ class RunPoint:
 
 
 def build_run_list() -> List[RunPoint]:
-    """Every model x in-scope dtype x DEC-6 token from ``moe_tuning_spec.MODELS``.
+    """Every model x in-scope dtype x the token-grid policy token from ``moe_tuning_spec.MODELS``.
 
     This is the authoritative campaign workload; the harness sweeps exactly these
-    points so coverage is the full DEC-6 grid (not a partial manual table).
+    points so coverage is the full the token-grid policy grid (not a partial manual table).
     """
     points: List[RunPoint] = []
     for m in spec.MODELS:
@@ -382,14 +408,14 @@ def expected_point_keys() -> set:
     return {(p.model, p.dtype, p.act, str(p.token)) for p in build_run_list()}
 
 
-# --- baseline validation gate (AC-1 negative tests) ------------------------
+# --- baseline validation gate (the baseline contract negative tests) ------------------------
 
 # The locked baseline must come from this exact commit (DEC scope).
 LOCKED_BASELINE_COMMIT = "523ca1c7"
 # Identity/provenance fields every baseline row must carry beyond the protocol.
 ROW_REQUIRED_FIELDS = ("command", "dtype", "act", "model", "token")
 # Numeric metric fields every baseline row must carry, parseable as float
-# (AC-1 + DEC-2: per-stage, combined kernel-path median+p95, effective TFLOPS,
+# (the baseline contract + the no-regression policy: per-stage, combined kernel-path median+p95, effective TFLOPS,
 # MFU, and the e2e guardrail median+p95, plus the correctness logits_diff).
 ROW_REQUIRED_METRIC_FIELDS = (
     "stage1_us",
@@ -419,7 +445,7 @@ def validate_baseline_row(row: dict) -> List[str]:
     """Return reasons ``row`` is NOT an acceptable locked-baseline row (empty=OK).
 
     Rejects rows that are not from the locked commit, not idle-GPU verified, miss
-    a required provenance/identity field, miss or non-numeric any AC-1/DEC-2 metric
+    a required provenance/identity field, miss or non-numeric any the baseline contract/the no-regression policy metric
     field (per-stage, kernel-path median+p95, effective TFLOPS, MFU, e2e
     median+p95, logits_diff), are not correctness_pass=True, or use a non-locked
     protocol (warmup/iters/graph/L2/clock).
@@ -439,7 +465,7 @@ def validate_baseline_row(row: dict) -> List[str]:
         if str(row.get(f, "")).strip() in ("", "None"):
             reasons.append(f"missing_{f}")
 
-    # Every AC-1/DEC-2 metric must be present AND numeric.
+    # Every the baseline contract/the no-regression policy metric must be present AND numeric.
     for f in ROW_REQUIRED_METRIC_FIELDS:
         if not _is_float(row.get(f)):
             reasons.append(f"missing_{f}")
@@ -448,7 +474,7 @@ def validate_baseline_row(row: dict) -> List[str]:
     if str(row.get("correctness_pass", "")).lower() not in ("true", "1"):
         reasons.append("correctness_not_passed")
 
-    # Locked protocol (DEC-2): warmup=10, iters=100, graph OFF, L2 flush on, clocks pinned.
+    # Locked protocol (the no-regression policy): warmup=10, iters=100, graph OFF, L2 flush on, clocks pinned.
     if str(row.get("warmup", "")) != str(spec.WARMUP_ITERS):
         reasons.append("warmup_mismatch")
     if str(row.get("iters", "")) != str(spec.BENCH_ITERS):
@@ -470,7 +496,7 @@ def validate_baseline_csv(path: str, expected_keys: Optional[set] = None) -> dic
     to ``expected_keys`` passes :func:`validate_baseline_row` AND all
     ``expected_keys`` points are present.
 
-    ``expected_keys`` defaults to the full DEC-6 workload
+    ``expected_keys`` defaults to the full the token-grid policy workload
     (:func:`expected_point_keys`).  Pass a subset (e.g.
     ``moe_tuning_spec.validated_point_keys()``) to validate the correctness-passing
     subset independently of the quarantined a8w4 shapes.  Rows outside
@@ -546,39 +572,54 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
 
 
 AITER_REPO = "/sgl-workspace/aiter"
+# Default gate mode per quant alias for the strict aiter guardrail.  a4w4 uses
+# SEPARATED (validated correct); a8w4 is quarantined (see moe_tuning_spec) so its
+# gate choice is recorded but never gates a win.
+DTYPE_ALIAS_TO_GATE = {"a4w4": "separated", "a8w4": "interleave"}
 
 
-def _aiter_cmd(rp: RunPoint) -> List[str]:
-    """aiter single-case e2e guardrail + correctness command for one point.
+def _aiter_cmd(rp: RunPoint, check_aot: bool = True) -> List[str]:
+    """Strict, AOT-checked, model-correct single-case aiter guardrail command.
 
-    Built so it runs EXACTLY ONE ``(token, dim, expert, topk, quant, act)`` case:
-    ``-q`` selects one quant, ``-t`` is a single token, and ``--no-flydsl-csv``
-    suppresses the chained CSV/AOT sweep (whose cases would otherwise be parsed by
-    mistake and which raises on AOT-cache miss).  Correctness is gated by THIS
-    harness's ``parse_aiter_output`` (``logits_diff <= 0.01`` and no FAIL/ERROR),
-    which applies the locked strict threshold regardless of the aiter legacy
-    path's internal ``strict_accuracy`` flag.
+    Invokes ``scripts/aiter_strict_point.py`` which calls aiter ``test_fmoe`` with
+    the model's TRUE activation and gate mode, ``strict_accuracy=True``, the
+    AOT-cache-wrapped variant (``check_aot`` -> ``fail_on_aot_cache_miss``), and
+    the locked e2e protocol (warmup=10/iters=100 injected over aiter's internal
+    2/5).  This is NOT the aiter legacy CLI (which is non-strict, non-AOT, and
+    hardcodes Swiglu/INTERLEAVE for the fp8xfp4 case).
     """
-    q = DTYPE_ALIAS_TO_AITER_Q[rp.dtype]
+    aq = spec.DTYPE_ALIAS_TO_A_DTYPE[rp.dtype]  # a4w4->fp4, a8w4->fp8
+    gate = DTYPE_ALIAS_TO_GATE[rp.dtype]
     cmd = [
         "python3",
-        os.path.join(AITER_REPO, "op_tests", "test_moe_2stage.py"),
-        "-q",
-        str(q),
-        "-dim",
-        f"{rp.model_dim},{rp.inter_dim}",
+        os.path.join(_REPO_ROOT, "scripts", "aiter_strict_point.py"),
+        "--model-dim",
+        str(rp.model_dim),
+        "--inter-dim",
+        str(rp.inter_dim),
         "-e",
         str(rp.experts),
         "-k",
         str(rp.topk),
         "-t",
         str(rp.token),
-        # Single-case only: skip the chained tuned-CSV/AOT sweep so we measure the
-        # requested point and never trip the AOT-cache-miss path.
-        "--no-flydsl-csv",
+        "--aq",
+        aq,
+        "--wq",
+        "fp4",
+        "--act",
+        rp.act,
+        "--gate",
+        gate,
+        "--warmup",
+        str(spec.WARMUP_ITERS),
+        "--iters",
+        str(spec.BENCH_ITERS),
+        "--aiter-repo",
+        AITER_REPO,
     ]
-    if rp.act == "swiglu":
-        cmd += ["-a", "swiglu"]
+    if not check_aot:
+        cmd.append("--no-aot")
     return cmd
 
 
@@ -632,7 +673,7 @@ def run_point(
     e2e_samples, logits_samples, correctness = [], [], None
     if measure_e2e:
         for _ in range(max(1, reps)):
-            res = parse_aiter_output(_exec(aiter_cmd, gpu_id))
+            res = parse_strict_aiter_output(_exec(aiter_cmd, gpu_id))
             if res["e2e_us"] is not None:
                 e2e_samples.append(res["e2e_us"])
             if res["logits_diff"] is not None:
@@ -734,6 +775,7 @@ __all__ = [
     "parse_flydsl_stage_us",
     "parse_flydsl_sorting_us",
     "parse_aiter_output",
+    "parse_strict_aiter_output",
     "combined_kernel_path_us",
     "summarize",
     "compute_metrics",

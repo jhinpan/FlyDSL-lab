@@ -157,22 +157,42 @@ def test_parse_aiter_output_fail_cases():
     assert harness.parse_aiter_output("nothing")["correctness_pass"] is False
 
 
-def test_aiter_cmd_is_strict_single_case():
-    # Codex blocking #1: the aiter guardrail command must run exactly one case
-    # (-q one quant, -t one token) and suppress the chained CSV/AOT sweep that
-    # would crash on AOT-cache miss and let an unrelated case be parsed.
+def test_aiter_cmd_is_strict_aot_model_correct():
+    # Round 3: the aiter guardrail must use the strict/AOT/model-correct runner
+    # (scripts/aiter_strict_point.py), NOT the non-strict legacy CLI, and must
+    # carry the model's true act/gate, locked warmup/iters, and AOT enabled.
     rp = harness.RunPoint("kimi_k2", 7168, 256, 384, 8, "silu", "a4w4", 16)
     cmd = harness._aiter_cmd(rp)
-    assert "--no-flydsl-csv" in cmd
-    assert "-q" in cmd and cmd[cmd.index("-q") + 1] == "4"  # a4w4 -> quant index 4
-    assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "16"  # single token
-    assert "-a" not in cmd  # silu -> no swiglu flag
-    # a8w4 -> quant index 7; swiglu model adds -a swiglu.
+    joined = " ".join(cmd)
+    assert "aiter_strict_point.py" in joined
+    # Must NOT be the legacy CLI path.
+    assert "test_moe_2stage.py" not in joined
+    assert "--no-flydsl-csv" not in cmd
+    assert cmd[cmd.index("--aq") + 1] == "fp4"  # a4w4 -> fp4 activation
+    assert cmd[cmd.index("--act") + 1] == "silu"
+    assert cmd[cmd.index("--gate") + 1] == "separated"
+    assert cmd[cmd.index("--warmup") + 1] == "10"
+    assert cmd[cmd.index("--iters") + 1] == "100"
+    assert "--no-aot" not in cmd  # AOT cache check ON by default
+    assert cmd[cmd.index("-t") + 1] == "16"
+    # a8w4 -> fp8 activation; swiglu model carries swiglu act.
     rpg = harness.RunPoint("gpt_oss", 3072, 3072, 128, 4, "swiglu", "a8w4", 512)
     cmdg = harness._aiter_cmd(rpg)
-    assert cmdg[cmdg.index("-q") + 1] == "7"
-    assert "--no-flydsl-csv" in cmdg
-    assert cmdg[cmdg.index("-a") + 1] == "swiglu"
+    assert cmdg[cmdg.index("--aq") + 1] == "fp8"
+    assert cmdg[cmdg.index("--act") + 1] == "swiglu"
+    # --no-aot toggle is honored.
+    assert "--no-aot" in harness._aiter_cmd(rp, check_aot=False)
+
+
+def test_parse_strict_aiter_output():
+    ok = 'noise\nSTRICT_RESULT {"e2e_us": 80.7, "logits_diff": 1.0e-05, "correctness_pass": true}\n'
+    r = harness.parse_strict_aiter_output(ok)
+    assert r["e2e_us"] == 80.7 and r["logits_diff"] == 1.0e-05 and r["correctness_pass"] is True
+    fail = 'STRICT_RESULT {"error": "AssertionError: accuracy check failed", "correctness_pass": false}\n'
+    rf = harness.parse_strict_aiter_output(fail)
+    assert rf["correctness_pass"] is False and "AssertionError" in rf["error"]
+    miss = harness.parse_strict_aiter_output("no result here")
+    assert miss["correctness_pass"] is False and miss["error"] == "no_strict_result"
 
 
 # --- run-list coverage (full DEC-6 grid from spec) -------------------------
@@ -713,18 +733,23 @@ def test_repeatability_check(tmp_path):
 def test_quarantine_and_validated_keys():
     from kernels import moe_tuning_spec as spec
 
-    # The a8w4 shapes whose aiter legacy path forces Swiglu/interleave are quarantined.
+    # Round 3: ALL a8w4 shapes are correctness-quarantined (the non-fp4-activation
+    # e2e path fails the aiter correctness gate for fp8 AND bf16 activation; only
+    # fp4 activation passes).  DS V3 a8w4 is included (its Round 2 "pass" was the
+    # legacy-Swiglu artifact, not a real Silu a8w4 pass).
+    assert spec.is_quarantined("deepseek_v3", "a8w4")
     assert spec.is_quarantined("deepseek_v4", "a8w4")
     assert spec.is_quarantined("kimi_k2", "a8w4")
     assert spec.is_quarantined("gpt_oss", "a8w4")
-    # a4w4 everywhere and DS V3 a8w4 are NOT quarantined.
-    assert not spec.is_quarantined("deepseek_v3", "a8w4")
+    # a4w4 is NOT quarantined for any model.
+    assert not spec.is_quarantined("deepseek_v3", "a4w4")
     assert not spec.is_quarantined("kimi_k2", "a4w4")
 
     vkeys = spec.validated_point_keys()
-    # DS V3 a4w4 (16) + DS V3 a8w4 (16) + Kimi a4w4 (16) + GPT-OSS a4w4 (8) = 56.
-    assert len(vkeys) == 56
-    assert ("deepseek_v3", "a8w4", "silu", "1") in vkeys
+    # Validated = all a4w4: DS V3 (16) + Kimi (16) + GPT-OSS (8) = 40.
+    assert len(vkeys) == 40
+    assert ("deepseek_v3", "a4w4", "silu", "1") in vkeys
+    assert ("deepseek_v3", "a8w4", "silu", "1") not in vkeys  # quarantined
     assert ("kimi_k2", "a8w4", "silu", "1") not in vkeys  # quarantined
     assert ("gpt_oss", "a8w4", "swiglu", "256") not in vkeys  # quarantined
     # validated subset is a strict subset of the full workload.

@@ -11,8 +11,8 @@ running log lives in ``docs/optimization-ledger.md``.
 
 The Pareto comparison takes a baseline per-point CSV and a candidate per-point
 CSV (both emitted by ``scripts/moe_tuning_harness.py``) and reports, per point,
-whether the candidate is a win / regression / neutral under the locked DEC-1 /
-DEC-2 predicates.  A win is only claimable when no point regresses on either the
+whether the candidate is a win / regression / neutral under the locked the win-margin policy /
+the no-regression policy predicates.  A win is only claimable when no point regresses on either the
 kernel-path or e2e metric (no Pareto regression) and the re-run-stability rule
 holds.
 """
@@ -36,7 +36,7 @@ from kernels import moe_tuning_spec as spec  # noqa: E402
 ATTEMPTS_JSONL = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
 LEDGER_MD = os.path.join(_REPO_ROOT, "docs", "optimization-ledger.md")
 
-# Required provenance keys for any ledger attempt (AC-7).
+# Required provenance keys for any ledger attempt (the ledger contract).
 REQUIRED_ATTEMPT_FIELDS = (
     "config",
     "stage",
@@ -84,7 +84,7 @@ def append_attempt(attempt: Attempt, path: str = ATTEMPTS_JSONL, now: Optional[f
     """Append an attempt to the JSONL ledger.
 
     Raises ``ValueError`` if any required provenance field is missing, so a win
-    can never be recorded without complete provenance (AC-7 negative gate).
+    can never be recorded without complete provenance (the ledger contract negative gate).
     """
     missing = attempt.missing_fields()
     if missing:
@@ -133,7 +133,7 @@ class PointVerdict:
 
 
 def compare_point(baseline: dict, candidate: dict) -> PointVerdict:
-    """Apply DEC-1 / DEC-2 predicates to one (baseline, candidate) point pair."""
+    """Apply the win-margin policy / the no-regression policy predicates to one (baseline, candidate) point pair."""
     token = int(float(candidate.get("token") or baseline.get("token") or 0))
     key = (candidate.get("model"), candidate.get("dtype"), candidate.get("act"), candidate.get("token"))
     v = PointVerdict(key=key, token=token)
@@ -203,8 +203,8 @@ def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     point; mfu for large target buckets), makes ``coverage_complete`` False, which
     forces ``pareto_clean`` False.
 
-    A win is only claimable when ``pareto_clean`` holds (DEC-2 + full coverage)
-    AND at least one target-bucket / small-token win is present (DEC-1).
+    A win is only claimable when ``pareto_clean`` holds (the no-regression policy + full coverage)
+    AND at least one target-bucket / small-token win is present (the win-margin policy).
     Re-run-stability is enforced separately by re-running and re-comparing.
     """
     base = read_point_csv(baseline_csv)
@@ -234,13 +234,13 @@ def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
 
 
 def repeatability_check(csv_a: str, csv_b: str) -> dict:
-    """Compare two independent sweeps of the SAME config under DEC-2.
+    """Compare two independent sweeps of the SAME config under the no-regression policy.
 
     For each shared (model, dtype, act, token) point, a metric is "stable" if the
-    two runs agree within the DEC-2 noise band (NOT a regression in either
+    two runs agree within the the no-regression policy noise band (NOT a regression in either
     direction): ``|b - a| <= max(a*REGRESSION_REL, ABS_US_BAND)``.  Returns the
     set of unstable points per metric; an empty unstable set demonstrates the
-    harness is repeatable (AC-1.1).
+    harness is repeatable (the measurement protocol).
     """
     a = read_point_csv(csv_a)
     b = read_point_csv(csv_b)
