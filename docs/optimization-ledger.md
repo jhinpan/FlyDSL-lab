@@ -68,6 +68,27 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
+### DS V3 a4w4 tokens 32/64 — legal stage1 tile sweep — NON-WINNING (kernel-path)
+
+- Result: `loss`. AC-4's small-token criterion is **kernel-path** latency
+  (`spec.is_small_token_win`: `tuned <= baseline*0.90` AND `baseline-tuned >= 2µs`).
+- Scope: DeepSeek V3 a4w4 (7168/256, E257/topk9), tokens 32 + 64, all legal stage1
+  tiles (tile_m ∈ {32,64,128} × tile_n ∈ {64,128,256}, k1=256; stage2 256/256).
+  Protocol: kernel-path only (`--no-e2e`), reps=3, clocks harness-verified pinned,
+  idle verified, via the fail-closed candidate CLI.
+- Baseline kp: t32=179.8µs, t64=203.0µs → gate needs t32≤161.8, t64≤182.7.
+- **No legal tile clears the gate.** Best balanced is stage1 `m32_n128`
+  (t32 166.4 −7.5%, t64 187.7 −7.5%); `m32_n64` is t32 166.1 −7.6% / t64 191.8
+  −5.5%. All small/mid tiles land ~−3…−7.6% (short of −10%); large tiles (m128)
+  regress hard (+38…+101%).
+- Conclusion: **stage1 tile-only tuning cannot make DS V3 32/64 an AC-4 win** — the
+  best is ~−7.5%, ~2–5µs short of the 10% gate. Routed to the AC-3/AC-4 profiling
+  + secondary-levers task (stage2 tile / xcd_swizzle / persist_m / async / split-K
+  from a profiler hypothesis). This confirms and extends the earlier `tile_n=128`
+  partial: DS V3 small-token wins remain tokens 1–16 only.
+- Artifacts: `docs/dsv3_3264_sweep/dsv3_a4w4_m{32,64,128}_n{64,128,256}.csv`
+  (9 CSVs), attempt in `docs/attempts.jsonl`.
+
 ### Repeatability re-measure — TWO-METRIC (AC-1.1 MET) — Kimi K2 a4w4 baseline
 
 - Result: `neutral` (baseline re-measurement, not a tuning lever). Kernels are
