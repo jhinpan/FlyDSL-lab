@@ -34,6 +34,28 @@ def _percentile(sorted_vals, q):
     return sorted_vals[idx]
 
 
+def _timed_distribution(func, rotate_args, num_iters, time_call):
+    """Run ``func`` for ``num_iters``, CYCLING through ``rotate_args`` (the
+    cache-sized argument copies = L2-flush behavior), timing each call with
+    ``time_call(func, args, kwargs) -> microseconds``.
+
+    Returns ``(data, median_us, p95_us, n_rotate)``.  Pure/host-testable: the GPU
+    event timing is injected via ``time_call`` so the rotation contract (iteration
+    i uses ``rotate_args[i % n]``) can be unit-tested without a device.
+    """
+    n_rot = len(rotate_args)
+    latencies = []
+    data = None
+    for i in range(num_iters):
+        a_i, kw_i = rotate_args[i % n_rot]
+        us, data = time_call(func, a_i, kw_i)
+        latencies.append(us)
+    ordered = sorted(latencies)
+    n = len(ordered)
+    median = ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2.0
+    return data, median, _percentile(ordered, 0.95), n_rot
+
+
 def perftest(num_iters=20, num_warmup=3, testGraph=False, num_rotate_args=0, needTrace=False):
     def decorator(func):
         def wrapper(*args, **kwargs):
@@ -71,28 +93,21 @@ def perftest(num_iters=20, num_warmup=3, testGraph=False, num_rotate_args=0, nee
             # protocol claims (l2_flush_per_iter=True), not a hot-cache reuse of one
             # tensor set.  LAST_PERF_DIST["n_rotate"] records how many copies cycled.
             if int(os.environ.get("FLYDSL_PERF_DIST", 0)):
-                latencies = []
                 start_event = torch.cuda.Event(enable_timing=True)
                 end_event = torch.cuda.Event(enable_timing=True)
-                n_rot = len(rotate_args)
-                for i in range(num_iters):
-                    a_i, kw_i = rotate_args[i % n_rot]
+
+                def _time_call(fn, a_i, kw_i):
                     start_event.record()
-                    data = func(*a_i, **kw_i)
+                    out = fn(*a_i, **kw_i)
                     end_event.record()
                     end_event.synchronize()
-                    latencies.append(start_event.elapsed_time(end_event) * 1000.0)  # ms -> us
+                    return start_event.elapsed_time(end_event) * 1000.0, out  # ms -> us
+
+                data, median, p95, n_rot = _timed_distribution(func, rotate_args, num_iters, _time_call)
                 torch.cuda.synchronize()
-                LAST_PERF_DIST["n_rotate"] = n_rot
-                ordered = sorted(latencies)
-                median = (
-                    ordered[len(ordered) // 2]
-                    if len(ordered) % 2
-                    else (ordered[len(ordered) // 2 - 1] + ordered[len(ordered) // 2]) / 2.0
-                )
-                p95 = _percentile(ordered, 0.95)
                 LAST_PERF_DIST["median"] = median
                 LAST_PERF_DIST["p95"] = p95
+                LAST_PERF_DIST["n_rotate"] = n_rot
                 logger.info(f"perf_dist: median={median:.3f} us p95={p95:.3f} us over {num_iters} iters")
                 return data, median
 

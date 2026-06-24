@@ -74,12 +74,17 @@ file is the human-facing running log.
     median+p95; passes `validate_baseline_csv(validated_point_keys())` **valid=True,
     0 missing, 0 errors**. This is the validated reference for the in-scope a4w4 set.
   - `docs/baseline_523ca1c7_validated_run2.csv` +
-    `docs/baseline_523ca1c7_repeatability.json` — independent second sweep + DEC-2
-    repeatability under the truthful timed-loop protocol. Kernel-path: 11/40
-    points outside the band (worst ~4.6%, all small-token where absolute us is
-    tiny); e2e (guardrail): 8/40 (worst ~7%). The true per-iteration timing is
-    noisier than a profiler-rotated average; win-claims will need more reps or a
-    tighter small-token band.
+    `docs/baseline_523ca1c7_repeatability.json` — two independent sweeps under the
+    faithful L2-flush rotated protocol at reps=3. Residual instability is confined
+    to SMALL TOKENS (1-32): kernel-path 8/40 (worst ~3.9us), e2e 6/40 (worst
+    ~2.9us), all just over the `max(2%, 2us)` absolute floor. This is irreducible
+    shared-node jitter at tiny absolute us (30-180us); raising reps 1->3 did not
+    remove it. At a `max(2%, 5us)` small-token floor, e2e is fully stable (0/40)
+    and kernel-path drops to 1/40. **OPEN USER PROTOCOL DECISION:** widen the
+    small-token (tokens<=64) repeatability/no-regression absolute band to ~5us
+    (still far below the DEC-1 win thresholds of 10% AND >=2us), or keep 2us and
+    accept that tiny-token points need more aggressive noise control. Not
+    self-approved.
   - `docs/baseline_523ca1c7.csv` — honest full 96-point record (40 a4w4 pass + 56
     a8w4 via the strict path, `correctness_pass=False`). Default
     `validate_baseline_csv` fails ONLY on the a8w4 correctness rows, 0 missing.

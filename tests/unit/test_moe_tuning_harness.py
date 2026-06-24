@@ -817,19 +817,47 @@ def test_validate_baseline_csv_subset_keys(tmp_path):
     assert harness.validate_baseline_csv(str(out))["valid"] is False  # full workload not covered
 
 
-def test_perf_dist_rotation_and_percentile():
-    # The timed-loop distribution helper and rotation indexing are pure logic:
-    # iteration i must use rotate_args[i % n], cycling the cache-sized arg copies
-    # (the L2-flush behavior), and _percentile is nearest-rank.
+def test_perf_dist_percentile():
     import importlib
 
     tc = importlib.import_module("tests.test_common")
     # nearest-rank p95 over 1..100: idx=round(0.95*99)=94 -> value 95 (0-based).
     assert tc._percentile(list(range(1, 101)), 0.95) == 95
     assert tc._percentile([], 0.95) is None
-    # rotation index pattern over n copies.
-    n = 4
-    used = [i % n for i in range(10)]
-    assert used == [0, 1, 2, 3, 0, 1, 2, 3, 0, 1]
-    # LAST_PERF_DIST exposes the n_rotate field the timed loop records.
     assert "n_rotate" in tc.LAST_PERF_DIST
+
+
+def test_timed_distribution_rotates_distinct_args():
+    # Branch-level regression for the FLYDSL_PERF_DIST timed loop: it must cycle
+    # the cache-sized rotated arg copies (iteration i -> rotate_args[i % n]) so
+    # DISTINCT working sets reach func (the L2-flush behavior), and compute
+    # median/p95 from the injected per-call timings.
+    import importlib
+
+    tc = importlib.import_module("tests.test_common")
+
+    # 3 distinct arg copies; record which args each call received.
+    rotate_args = [((tag,), {}) for tag in ("A", "B", "C")]
+    seen = []
+
+    def func(tag):
+        seen.append(tag)
+        return f"out-{tag}"
+
+    # Injected timer returns a deterministic latency per call so we can check
+    # median/p95 without a GPU.
+    timings = iter([10.0, 30.0, 20.0, 50.0, 40.0, 60.0, 70.0])
+
+    def time_call(fn, a_i, kw_i):
+        out = fn(*a_i, **kw_i)
+        return next(timings), out
+
+    data, median, p95, n_rot = tc._timed_distribution(func, rotate_args, num_iters=7, time_call=time_call)
+    # 7 iters over 3 copies -> A,B,C,A,B,C,A (distinct args actually reach func).
+    assert seen == ["A", "B", "C", "A", "B", "C", "A"]
+    assert n_rot == 3
+    assert data == "out-A"  # last call's output
+    # median of [10,30,20,50,40,60,70] sorted=[10,20,30,40,50,60,70] -> 40.
+    assert median == 40.0
+    # nearest-rank p95: idx=round(0.95*6)=6 -> 70.
+    assert p95 == 70.0
