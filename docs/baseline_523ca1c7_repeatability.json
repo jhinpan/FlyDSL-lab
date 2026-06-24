@@ -3,144 +3,93 @@
     "warmup": 10,
     "iters": 100,
     "reps": 3,
-    "timing": "true per-iteration L2-flush rotated timed-loop median+p95; e2e median = median of aiter rotated-average over reps",
+    "clocks_pinned": true,
+    "pin_mechanism": "rocm-smi --setperfdeterminism 2200",
     "band": "max(2%,2us)"
   },
   "n_shared": 40,
-  "kernel_path_unstable": 8,
-  "kernel_path_worst_drift_us": 5.1,
+  "kernel_path_unstable": 6,
+  "kernel_path_worst_drift_us": 5.3,
   "kernel_path_unstable_points": [
     {
       "model": "deepseek_v3",
-      "dtype": "a4w4",
       "token": 1,
-      "run1": 129.5,
-      "run2": 134.6,
-      "drift_us": 5.1,
-      "band_us": 2.6
+      "run1": 132.8,
+      "run2": 130.1,
+      "drift_us": 2.7
     },
     {
       "model": "deepseek_v3",
-      "dtype": "a4w4",
-      "token": 16,
-      "run1": 152.3,
-      "run2": 156.5,
-      "drift_us": 4.2,
-      "band_us": 3.0
-    },
-    {
-      "model": "deepseek_v3",
-      "dtype": "a4w4",
       "token": 2,
-      "run1": 127.0,
-      "run2": 131.2,
-      "drift_us": 4.2,
-      "band_us": 2.5
+      "run1": 127.1,
+      "run2": 130.5,
+      "drift_us": 3.4
     },
     {
       "model": "deepseek_v3",
-      "dtype": "a4w4",
       "token": 32,
-      "run1": 179.2,
-      "run2": 184.0,
-      "drift_us": 4.8,
-      "band_us": 3.6
+      "run1": 178.2,
+      "run2": 183.5,
+      "drift_us": 5.3
     },
     {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
-      "token": 1,
-      "run1": 129.4,
-      "run2": 133.1,
-      "drift_us": 3.7,
-      "band_us": 2.6
-    },
-    {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
-      "token": 2,
-      "run1": 129.1,
-      "run2": 132.3,
-      "drift_us": 3.2,
-      "band_us": 2.6
-    },
-    {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
-      "token": 32,
-      "run1": 175.3,
-      "run2": 179.0,
-      "drift_us": 3.7,
-      "band_us": 3.5
-    },
-    {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
+      "model": "deepseek_v3",
       "token": 4,
-      "run1": 131.0,
-      "run2": 134.0,
-      "drift_us": 3.0,
-      "band_us": 2.6
+      "run1": 135.3,
+      "run2": 132.2,
+      "drift_us": 3.1
+    },
+    {
+      "model": "deepseek_v3",
+      "token": 8,
+      "run1": 137.7,
+      "run2": 141.0,
+      "drift_us": 3.3
+    },
+    {
+      "model": "kimi_k2",
+      "token": 2,
+      "run1": 133.2,
+      "run2": 129.9,
+      "drift_us": 3.3
     }
   ],
-  "e2e_unstable": 6,
-  "e2e_worst_drift_us": 2.9,
+  "e2e_unstable": 2,
+  "e2e_worst_drift_us": 2.2,
   "e2e_unstable_points": [
     {
       "model": "deepseek_v3",
-      "dtype": "a4w4",
-      "token": 1,
-      "run1": 34.1,
-      "run2": 31.8,
-      "drift_us": 2.3,
-      "band_us": 2.0
+      "token": 8,
+      "run1": 62.2,
+      "run2": 60.0,
+      "drift_us": 2.2
     },
     {
-      "model": "deepseek_v3",
-      "dtype": "a4w4",
+      "model": "kimi_k2",
       "token": 2,
-      "run1": 41.1,
-      "run2": 38.7,
-      "drift_us": 2.4,
-      "band_us": 2.0
-    },
-    {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
-      "token": 1,
-      "run1": 38.0,
-      "run2": 35.6,
-      "drift_us": 2.4,
-      "band_us": 2.0
-    },
-    {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
-      "token": 16,
-      "run1": 86.9,
-      "run2": 84.0,
-      "drift_us": 2.9,
-      "band_us": 2.0
-    },
-    {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
-      "token": 32,
-      "run1": 118.8,
-      "run2": 116.2,
-      "drift_us": 2.6,
-      "band_us": 2.4
-    },
-    {
-      "model": "kimi_k2",
-      "dtype": "a4w4",
-      "token": 4,
-      "run1": 53.0,
-      "run2": 50.8,
-      "drift_us": 2.2,
-      "band_us": 2.0
+      "run1": 39.7,
+      "run2": 41.9,
+      "drift_us": 2.2
     }
   ],
-  "finding": "All instability is confined to SMALL TOKENS (1-32) where absolute us is 30-180us. Drift is 3-5us (kernel-path) / 2-3us (e2e), just over the max(2%,2us) band. This is shared-node measurement noise at tiny absolute latency, NOT a harness defect; raising reps from 1 to 3 did not remove it (sub-5us run-to-run jitter is irreducible here). Large/mid tokens are stable.",
-  "protocol_decision_requested": "The max(2%,2us) absolute floor is too tight for the tiny-token regime. Proposed (USER DECISION): widen the small-token (tokens<=64) repeatability/no-regression absolute band to ~5us (e.g. max(2%,5us)), which is still far below the DEC-1 win thresholds (10pct AND >=2us). Not self-approved."
+  "floor_sensitivity": {
+    "2.0us": {
+      "kernel_path": 6,
+      "e2e": 2
+    },
+    "3.0us": {
+      "kernel_path": 5,
+      "e2e": 0
+    },
+    "5.0us": {
+      "kernel_path": 1,
+      "e2e": 0
+    },
+    "6.0us": {
+      "kernel_path": 0,
+      "e2e": 0
+    }
+  },
+  "finding": "Pinning clocks (performance determinism, sclk 2200MHz) materially improved e2e (6/40->2/40 unstable) but kernel-path remains 6/40 unstable at SMALL TOKENS (1-32), worst ~5.3us. All instability is at tokens<=32 where absolute kernel-path us is 127-183us; the 2us absolute floor is ~1.1-1.6pct there, below normal launch/host jitter (~3-5us). In-protocol levers EXHAUSTED across rounds 5-7: faithful L2-flush rotation, reps=3, AND actual clock pinning. The residual is irreducible measurement noise at tiny absolute latency on this node, not a harness defect.",
+  "protocol_decision_requested": "The max(2%,2us) absolute floor is too tight for the tiny-token regime even with clocks pinned. Proposed (USER DECISION, NOT self-approved): widen the small-token (tokens<=64) repeatability/no-regression absolute band. Floor sensitivity above shows the trade; a ~6us small-token floor makes both metrics stable while staying far below the DEC-1 small-token win threshold (>=2us absolute AND >=10pct)."
 }

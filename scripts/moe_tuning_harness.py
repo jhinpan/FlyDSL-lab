@@ -571,6 +571,30 @@ def check_idle_gpu(gpu_id: str, busy_pct_threshold: int = 5) -> bool:
     return False
 
 
+# Locked sclk to pin for the measurement protocol (this node's max, MHz).
+PINNED_SCLK_MHZ = 2200
+
+
+def pin_clocks(gpu_id: str, sclk_mhz: int = PINNED_SCLK_MHZ) -> bool:
+    """Enable performance determinism (pin sclk) so the recorded
+    ``clocks_pinned`` flag is truthful, not aspirational.
+
+    Returns True if determinism was enabled (rocm-smi reports success), else
+    False (e.g. the container forbids it).  DVFS auto-scaling is the dominant
+    source of small-token run-to-run jitter; pinning is the in-protocol way to
+    reduce it without changing the no-regression band.
+    """
+    out = _run(["rocm-smi", "-d", str(gpu_id), "--setperfdeterminism", str(sclk_mhz)])
+    return "performance determinism" in out.lower() and "successfully" in out.lower()
+
+
+def clocks_pinned_state(gpu_id: str) -> bool:
+    """True if the GPU performance level is a pinned/deterministic mode (not auto)."""
+    out = _run(["rocm-smi", "-d", str(gpu_id), "--showperflevel"]).lower()
+    # "determinism" or "manual"/"high" indicate a pinned level; "auto" is DVFS.
+    return ("determinism" in out) or ("manual" in out) or ("high" in out)
+
+
 def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
     """FlyDSL per-stage benchmark command for one point under the locked protocol."""
     in_dtype = "fp4" if rp.dtype == "a4w4" else "a8w4"

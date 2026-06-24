@@ -861,3 +861,26 @@ def test_timed_distribution_rotates_distinct_args():
     assert median == 40.0
     # nearest-rank p95: idx=round(0.95*6)=6 -> 70.
     assert p95 == 70.0
+
+
+def test_clock_pinning_helpers(monkeypatch):
+    # pin_clocks parses the rocm-smi determinism-success message; clocks_pinned_state
+    # treats determinism/manual/high as pinned and auto as DVFS (not pinned).
+    outs = {}
+
+    def fake_run(cmd):
+        if "--setperfdeterminism" in cmd:
+            return outs.get("set", "")
+        if "--showperflevel" in cmd:
+            return outs.get("level", "")
+        return ""
+
+    monkeypatch.setattr(harness, "_run", fake_run)
+    outs["set"] = "GPU[0]: Successfully enabled performance determinism and set GFX clock frequency: 2200"
+    assert harness.pin_clocks("0") is True
+    outs["set"] = "GPU[0]: set_perf_level, Not supported on the given system"
+    assert harness.pin_clocks("0") is False
+    outs["level"] = "GPU[0]: Performance Level: determinism"
+    assert harness.clocks_pinned_state("0") is True
+    outs["level"] = "GPU[0]: Performance Level: auto"
+    assert harness.clocks_pinned_state("0") is False
