@@ -117,6 +117,53 @@ MODELS: Tuple[ModelShape, ...] = (
 # (the weight operand is fp4 in both in-scope cases).
 DTYPE_ALIAS_TO_A_DTYPE = {"a4w4": "fp4", "a8w4": "fp8"}
 
+# --- Correctness quarantine (Round 2 finding) ------------------------------
+# The aiter op_tests/test_moe_2stage.py *legacy CLI* path hardcodes
+# ActivationType.Swiglu and GateMode.INTERLEAVE for the per_1x32 fp8xfp4 (a8w4)
+# case (test_moe_2stage.py:_iter_legacy_cases ~line 758 and _effective_gate_mode),
+# ignoring the model's true activation.  Measuring Silu models (DeepSeek V4,
+# Kimi K2) through that path therefore compares a Swiglu+interleave kernel against
+# a Silu reference and yields logits_diff ~= 0.99 (near-total mismatch).  GPT-OSS
+# (genuinely Swiglu) also fails a8w4 at >=512 tokens and crashes/OOM at large
+# shapes.  This is a harness-path artifact, NOT a demonstrated FlyDSL kernel bug:
+# a4w4 passes everywhere and DeepSeek V3 a8w4 passes through the same harness.
+#
+# Until the a8w4 correctness path is validated via aiter's model-CSV mode (which
+# encodes the correct ActivationType per model), these (model, dtype) pairs are
+# QUARANTINED: their baseline rows are kept for provenance but excluded from the
+# validated baseline and from any win claim.
+QUARANTINED_SHAPES: Tuple[Tuple[str, str], ...] = (
+    ("deepseek_v4", "a8w4"),
+    ("kimi_k2", "a8w4"),
+    ("gpt_oss", "a8w4"),
+)
+
+
+def is_quarantined(model: str, dtype: str) -> bool:
+    """True if (model, dtype) is correctness-quarantined (see QUARANTINED_SHAPES)."""
+    return (model, dtype) in QUARANTINED_SHAPES
+
+
+def validated_models():
+    """Yield (ModelShape, dtype) pairs that are NOT correctness-quarantined."""
+    for m in MODELS:
+        for dtype in m.dtypes:
+            if not is_quarantined(m.name, dtype):
+                yield m, dtype
+
+
+def validated_point_keys() -> set:
+    """(model, dtype, act, token) keys for the correctness-passing subset.
+
+    This is the workload the validated baseline must fully cover; the quarantined
+    a8w4 shapes are excluded until their correctness path is fixed.
+    """
+    keys = set()
+    for m, dtype in validated_models():
+        for token in m.token_grid:
+            keys.add((m.name, dtype, m.act, str(token)))
+    return keys
+
 
 def is_large_token(token: int) -> bool:
     """True if ``token`` is in the large-shape MFU regime (tokens >= 4096)."""

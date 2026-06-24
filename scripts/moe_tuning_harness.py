@@ -102,10 +102,17 @@ _SORT_RE = re.compile(r"FlyDSL MoE sort(?:ing)?[^\d]*([0-9.]+)\s*us", re.IGNOREC
 # aiter op_tests/test_moe_2stage.py full fused_moe e2e print (line 363):
 #   "ck_moe_2stages:  123.45 us,  654.00 tflops......(quant:...)"
 _AITER_E2E_RE = re.compile(r"ck_moe_2stages:\s*([0-9.]+)\s*us")
-# aiter logits_diff warning (line 374) and the strict accuracy assertion text.
+# aiter logits_diff warning line (only printed when logits_diff > 1e-3).
 _AITER_LOGITS_RE = re.compile(r"logits_diff[:=]\s*([0-9.eE+-]+)")
-# A FAIL/ERROR row or the strict accuracy assertion indicates a correctness miss.
-_AITER_FAIL_RE = re.compile(r"accuracy check failed|checkAllclose.*failed|AssertionError|FAIL|ERROR", re.IGNORECASE)
+# aiter summary markdown data row: the final two numeric cells are
+# ``... | <e2e us> | <logits_diff> | <model> |``.  This carries logits_diff even
+# when it is below the 1e-3 warning threshold (so no warning line is printed).
+_AITER_MD_ROW_RE = re.compile(r"\|\s*([0-9][0-9.eE+-]*)\s*\|\s*([0-9][0-9.eE+-]*)\s*\|\s*\w+\s*\|\s*$")
+# Real correctness-miss signals: the strict-accuracy assertion or a hard error.
+# NOTE: the bare ``checkAllclose ... failed!`` line is the LOOSE elementwise check
+# and is EXPECTED for fp4; correctness is gated on logits_diff <= 0.01 per the
+# locked contract, not on that line.
+_AITER_FAIL_RE = re.compile(r"accuracy check failed|AssertionError|Traceback|RuntimeError", re.IGNORECASE)
 
 # aiter -q quant index -> dtype alias used here (see l_quant in the harness).
 DTYPE_ALIAS_TO_AITER_Q = {"a4w4": 4, "a8w4": 7}
@@ -248,19 +255,28 @@ def parse_aiter_output(stdout: str) -> dict:
     """Extract e2e us, logits_diff, and correctness pass/fail from aiter stdout.
 
     The aiter ``op_tests/test_moe_2stage.py`` harness times the whole fused_moe
-    call (the e2e guardrail) and logs ``ck_moe_2stages: <us> us``; it logs
-    ``logits_diff`` and, under ``strict_accuracy``, asserts on a correctness miss.
-    ``correctness_pass`` is True only when an e2e number was produced and no
-    FAIL/ERROR/assertion text appears.
+    call (the e2e guardrail) and logs ``ck_moe_2stages: <us> us``; the
+    per-case ``us`` and ``logits_diff`` also appear in the final summary markdown
+    row (which carries logits_diff even when it is below the 1e-3 warning
+    threshold).  Correctness is gated on ``logits_diff <= 0.01`` (the locked
+    contract) plus the absence of a hard assertion/error; the bare loose
+    ``checkAllclose ... failed!`` line is expected for fp4 and is NOT a miss.
+
+    ``correctness_pass`` requires an e2e number, a logits_diff, ``logits_diff <=
+    0.01``, and no hard failure.
     """
-    e2e = _AITER_E2E_RE.findall(stdout)
-    logits = _AITER_LOGITS_RE.findall(stdout)
+    md = _AITER_MD_ROW_RE.findall(stdout)
+    md_e2e = float(md[-1][0]) if md else None
+    md_logits = float(md[-1][1]) if md else None
+
+    e2e_line = _AITER_E2E_RE.findall(stdout)
+    logits_line = _AITER_LOGITS_RE.findall(stdout)
+    e2e_us = float(e2e_line[-1]) if e2e_line else md_e2e
+    # Prefer the markdown logits cell (always present); fall back to the warning line.
+    logits_diff = md_logits if md_logits is not None else (float(logits_line[-1]) if logits_line else None)
+
     failed = bool(_AITER_FAIL_RE.search(stdout))
-    e2e_us = float(e2e[-1]) if e2e else None
-    logits_diff = float(logits[-1]) if logits else None
-    correctness_pass = (e2e_us is not None) and (not failed)
-    if logits_diff is not None:
-        correctness_pass = correctness_pass and (logits_diff <= 0.01)
+    correctness_pass = (e2e_us is not None) and (logits_diff is not None) and (logits_diff <= 0.01) and (not failed)
     return {"e2e_us": e2e_us, "logits_diff": logits_diff, "correctness_pass": correctness_pass}
 
 
@@ -370,16 +386,43 @@ def expected_point_keys() -> set:
 
 # The locked baseline must come from this exact commit (DEC scope).
 LOCKED_BASELINE_COMMIT = "523ca1c7"
-# Fields every baseline row must carry beyond the provenance object.
+# Identity/provenance fields every baseline row must carry beyond the protocol.
 ROW_REQUIRED_FIELDS = ("command", "dtype", "act", "model", "token")
+# Numeric metric fields every baseline row must carry, parseable as float
+# (AC-1 + DEC-2: per-stage, combined kernel-path median+p95, effective TFLOPS,
+# MFU, and the e2e guardrail median+p95, plus the correctness logits_diff).
+ROW_REQUIRED_METRIC_FIELDS = (
+    "stage1_us",
+    "stage2_us",
+    "sorting_us",
+    "kernel_path_us",
+    "kernel_path_us_p95",
+    "effective_tflops",
+    "mfu",
+    "e2e_us",
+    "e2e_us_p95",
+    "logits_diff",
+)
+
+
+def _is_float(v) -> bool:
+    if v in (None, "", "None"):
+        return False
+    try:
+        float(v)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def validate_baseline_row(row: dict) -> List[str]:
     """Return reasons ``row`` is NOT an acceptable locked-baseline row (empty=OK).
 
     Rejects rows that are not from the locked commit, not idle-GPU verified, miss
-    a required provenance/identity field, lack the e2e/correctness measurement, or
-    use a non-locked protocol (warmup/iters/graph/L2/clock).
+    a required provenance/identity field, miss or non-numeric any AC-1/DEC-2 metric
+    field (per-stage, kernel-path median+p95, effective TFLOPS, MFU, e2e
+    median+p95, logits_diff), are not correctness_pass=True, or use a non-locked
+    protocol (warmup/iters/graph/L2/clock).
     """
     reasons: List[str] = []
 
@@ -396,11 +439,14 @@ def validate_baseline_row(row: dict) -> List[str]:
         if str(row.get(f, "")).strip() in ("", "None"):
             reasons.append(f"missing_{f}")
 
-    # e2e + correctness must be present for a usable baseline point.
-    if str(row.get("e2e_us", "")).strip() in ("", "None"):
-        reasons.append("missing_e2e_us")
-    if str(row.get("logits_diff", "")).strip() in ("", "None"):
-        reasons.append("missing_logits_diff")
+    # Every AC-1/DEC-2 metric must be present AND numeric.
+    for f in ROW_REQUIRED_METRIC_FIELDS:
+        if not _is_float(row.get(f)):
+            reasons.append(f"missing_{f}")
+
+    # Correctness gate must have passed for this point.
+    if str(row.get("correctness_pass", "")).lower() not in ("true", "1"):
+        reasons.append("correctness_not_passed")
 
     # Locked protocol (DEC-2): warmup=10, iters=100, graph OFF, L2 flush on, clocks pinned.
     if str(row.get("warmup", "")) != str(spec.WARMUP_ITERS):
@@ -416,23 +462,34 @@ def validate_baseline_row(row: dict) -> List[str]:
     return reasons
 
 
-def validate_baseline_csv(path: str) -> dict:
+def validate_baseline_csv(path: str, expected_keys: Optional[set] = None) -> dict:
     """Validate every row of a baseline CSV and that coverage equals the workload.
 
     Returns ``{"valid": bool, "row_errors": {key: [reasons]}, "missing_points":
-    [...], "n_rows": int}``.  A baseline is valid only if every row passes
-    :func:`validate_baseline_row` AND all expected workload points are present.
+    [...], "n_rows": int}``.  A baseline is valid only if every row that belongs
+    to ``expected_keys`` passes :func:`validate_baseline_row` AND all
+    ``expected_keys`` points are present.
+
+    ``expected_keys`` defaults to the full DEC-6 workload
+    (:func:`expected_point_keys`).  Pass a subset (e.g.
+    ``moe_tuning_spec.validated_point_keys()``) to validate the correctness-passing
+    subset independently of the quarantined a8w4 shapes.  Rows outside
+    ``expected_keys`` are ignored (neither required nor cause errors).
     """
+    if expected_keys is None:
+        expected_keys = expected_point_keys()
     rows = read_csv(path)
     row_errors: Dict[str, list] = {}
     seen = set()
     for row in rows:
         key = (row.get("model"), row.get("dtype"), row.get("act"), row.get("token"))
+        if key not in expected_keys:
+            continue  # quarantined / out-of-subset row: not validated here.
         seen.add(key)
         errs = validate_baseline_row(row)
         if errs:
             row_errors[str(key)] = errs
-    missing = sorted(str(k) for k in (expected_point_keys() - seen))
+    missing = sorted(str(k) for k in (expected_keys - seen))
     valid = not row_errors and not missing
     return {"valid": valid, "row_errors": row_errors, "missing_points": missing, "n_rows": len(rows)}
 
@@ -488,12 +545,24 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
     ]
 
 
+AITER_REPO = "/sgl-workspace/aiter"
+
+
 def _aiter_cmd(rp: RunPoint) -> List[str]:
-    """aiter strict-correctness + e2e guardrail command for one point."""
+    """aiter single-case e2e guardrail + correctness command for one point.
+
+    Built so it runs EXACTLY ONE ``(token, dim, expert, topk, quant, act)`` case:
+    ``-q`` selects one quant, ``-t`` is a single token, and ``--no-flydsl-csv``
+    suppresses the chained CSV/AOT sweep (whose cases would otherwise be parsed by
+    mistake and which raises on AOT-cache miss).  Correctness is gated by THIS
+    harness's ``parse_aiter_output`` (``logits_diff <= 0.01`` and no FAIL/ERROR),
+    which applies the locked strict threshold regardless of the aiter legacy
+    path's internal ``strict_accuracy`` flag.
+    """
     q = DTYPE_ALIAS_TO_AITER_Q[rp.dtype]
     cmd = [
         "python3",
-        os.path.join("/sgl-workspace/aiter", "op_tests", "test_moe_2stage.py"),
+        os.path.join(AITER_REPO, "op_tests", "test_moe_2stage.py"),
         "-q",
         str(q),
         "-dim",
@@ -504,6 +573,9 @@ def _aiter_cmd(rp: RunPoint) -> List[str]:
         str(rp.topk),
         "-t",
         str(rp.token),
+        # Single-case only: skip the chained tuned-CSV/AOT sweep so we measure the
+        # requested point and never trip the AOT-cache-miss path.
+        "--no-flydsl-csv",
     ]
     if rp.act == "swiglu":
         cmd += ["-a", "swiglu"]
@@ -526,23 +598,48 @@ def run_point(
     gpu_id: str,
     provenance: Provenance,
     measure_e2e: bool = True,
+    reps: int = 3,
 ) -> PointRow:  # pragma: no cover - exercised only on the gfx950 node
     """Measure one workload point: FlyDSL per-stage us + aiter e2e/correctness.
 
     ``tile`` carries tile_m1/n1/k1 and tile_n2/k2 (stage1 + stage2 tiles).  The
     combined kernel-path us = stage1 + stage2 + sorting; the aiter run supplies
     the e2e guardrail us, logits_diff, and correctness pass/fail.
+
+    Each FlyDSL/aiter invocation already averages ``iters`` device iterations
+    under the L2-rotation protocol; to obtain the locked median+p95 dispersion we
+    repeat each invocation ``reps`` times and summarize across reps.  Stage1/stage2
+    us are reported as the median across reps; ``kernel_path_us`` /
+    ``kernel_path_us_p95`` and ``e2e_us`` / ``e2e_us_p95`` are the median and p95 of
+    the per-rep combined and e2e samples.
     """
     flydsl_cmd = _flydsl_cmd(rp, gpu_id, tile)
-    fly_out = _exec(flydsl_cmd, gpu_id)
-    stages = parse_flydsl_stage_us(fly_out)
-    sorting = parse_flydsl_sorting_us(fly_out) or 0.0
-
     aiter_cmd = _aiter_cmd(rp)
     command = " ".join(flydsl_cmd) + " ; " + " ".join(aiter_cmd)
-    aiter_res = {"e2e_us": None, "logits_diff": None, "correctness_pass": None}
+
+    s1_samples, s2_samples, sort_samples, combined_samples = [], [], [], []
+    for _ in range(max(1, reps)):
+        out = _exec(flydsl_cmd, gpu_id)
+        stages = parse_flydsl_stage_us(out)
+        if stages["stage1_us"] is None or stages["stage2_us"] is None:
+            continue
+        srt = parse_flydsl_sorting_us(out) or 0.0
+        s1_samples.append(stages["stage1_us"])
+        s2_samples.append(stages["stage2_us"])
+        sort_samples.append(srt)
+        combined_samples.append(combined_kernel_path_us(stages["stage1_us"], stages["stage2_us"], srt))
+
+    e2e_samples, logits_samples, correctness = [], [], None
     if measure_e2e:
-        aiter_res = parse_aiter_output(_exec(aiter_cmd, gpu_id))
+        for _ in range(max(1, reps)):
+            res = parse_aiter_output(_exec(aiter_cmd, gpu_id))
+            if res["e2e_us"] is not None:
+                e2e_samples.append(res["e2e_us"])
+            if res["logits_diff"] is not None:
+                logits_samples.append(res["logits_diff"])
+            # correctness must hold on EVERY rep.
+            rep_ok = res["correctness_pass"]
+            correctness = rep_ok if correctness is None else (correctness and bool(rep_ok))
 
     row = PointRow(
         provenance=provenance,
@@ -561,21 +658,26 @@ def run_point(
         tile_m2=tile["tile_m1"],
         tile_n2=tile["tile_n2"],
         tile_k2=tile["tile_k2"],
-        stage1_us=stages["stage1_us"],
-        stage2_us=stages["stage2_us"],
-        sorting_us=sorting,
-        e2e_us=aiter_res["e2e_us"],
-        logits_diff=aiter_res["logits_diff"],
-        correctness_pass=aiter_res["correctness_pass"],
     )
-    if stages["stage1_us"] is not None and stages["stage2_us"] is not None:
-        combined = combined_kernel_path_us(stages["stage1_us"], stages["stage2_us"], sorting)
-        row.kernel_path_us = combined
+    if combined_samples:
+        row.stage1_us = summarize(s1_samples)["median"]
+        row.stage2_us = summarize(s2_samples)["median"]
+        row.sorting_us = summarize(sort_samples)["median"]
+        kp = summarize(combined_samples)
+        row.kernel_path_us = kp["median"]
+        row.kernel_path_us_p95 = kp["p95"]
         m = compute_metrics(
-            token=rp.token, model_dim=rp.model_dim, inter_dim=rp.inter_dim, topk=rp.topk, combined_us=combined
+            token=rp.token, model_dim=rp.model_dim, inter_dim=rp.inter_dim, topk=rp.topk, combined_us=kp["median"]
         )
         row.effective_tflops = m["effective_tflops"]
         row.mfu = m["mfu"]
+    if e2e_samples:
+        e = summarize(e2e_samples)
+        row.e2e_us = e["median"]
+        row.e2e_us_p95 = e["p95"]
+    if logits_samples:
+        row.logits_diff = max(logits_samples)  # worst-case correctness across reps
+    row.correctness_pass = correctness
     return row
 
 

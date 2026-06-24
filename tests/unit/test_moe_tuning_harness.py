@@ -114,7 +114,7 @@ def test_parse_flydsl_stage_us_missing():
     assert got["stage1_us"] is None and got["stage2_us"] is None
 
 
-def test_parse_aiter_output_pass():
+def test_parse_aiter_output_pass_warning_line():
     out = (
         "calling test_fmoe(...)\n"
         "ck_moe_2stages:  234.56 us,   654.00 tflops......(quant:fp4x2)[checkAllclose passed~]\n"
@@ -126,15 +126,53 @@ def test_parse_aiter_output_pass():
     assert res["correctness_pass"] is True
 
 
-def test_parse_aiter_output_fail_on_logits_and_assertion():
-    # logits over 0.01 -> correctness fail even with an e2e number.
-    out_logits = "ck_moe_2stages:  100.00 us, 100.00 tflops\nlogits_diff: 0.05\n"
+def test_parse_aiter_output_pass_markdown_row():
+    # logits_diff below 1e-3 prints no warning line; it only appears in the
+    # summary markdown row.  The loose "checkAllclose ... failed!" line is the
+    # EXPECTED fp4 elementwise warning and must NOT fail correctness.
+    out = (
+        "ck_moe_2stages:   84.32 us,  18.80 tflops......(quant:fp4x2)[checkAllclose atol=0.01 rtol=0.01 failed!]\n"
+        "moe_2stage summary (markdown):\n"
+        "| dtype | token | ... |      us |   logits_diff | model   |\n"
+        "|:------|------:| ... |--------:|--------------:|:--------|\n"
+        "| torch.bfloat16 | 16 | ... | 87.195 |    9.6236e-06 | legacy  |\n"
+    )
+    res = harness.parse_aiter_output(out)
+    assert res["e2e_us"] == 84.32
+    assert res["logits_diff"] == 9.6236e-06
+    assert res["correctness_pass"] is True
+
+
+def test_parse_aiter_output_fail_cases():
+    # logits over 0.01 (markdown row) -> fail.
+    out_logits = "ck_moe_2stages:  100.00 us, 100.00 tflops\n" "| torch.bfloat16 | 16 | ... | 100.0 | 0.05 | legacy |\n"
     assert harness.parse_aiter_output(out_logits)["correctness_pass"] is False
-    # strict accuracy assertion text -> fail.
-    out_assert = "ck_moe_2stages:  100.00 us\naccuracy check failed: checkAllclose err=1, logits_diff=0.2\n"
+    # hard assertion text -> fail even if a number was produced.
+    out_assert = "ck_moe_2stages:  100.00 us\naccuracy check failed: err=1, logits_diff=0.2\n"
     assert harness.parse_aiter_output(out_assert)["correctness_pass"] is False
+    # no logits at all -> fail (cannot confirm correctness).
+    out_no_logits = "ck_moe_2stages:  100.00 us, 100.00 tflops\n"
+    assert harness.parse_aiter_output(out_no_logits)["correctness_pass"] is False
     # no e2e number at all -> fail.
     assert harness.parse_aiter_output("nothing")["correctness_pass"] is False
+
+
+def test_aiter_cmd_is_strict_single_case():
+    # Codex blocking #1: the aiter guardrail command must run exactly one case
+    # (-q one quant, -t one token) and suppress the chained CSV/AOT sweep that
+    # would crash on AOT-cache miss and let an unrelated case be parsed.
+    rp = harness.RunPoint("kimi_k2", 7168, 256, 384, 8, "silu", "a4w4", 16)
+    cmd = harness._aiter_cmd(rp)
+    assert "--no-flydsl-csv" in cmd
+    assert "-q" in cmd and cmd[cmd.index("-q") + 1] == "4"  # a4w4 -> quant index 4
+    assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "16"  # single token
+    assert "-a" not in cmd  # silu -> no swiglu flag
+    # a8w4 -> quant index 7; swiglu model adds -a swiglu.
+    rpg = harness.RunPoint("gpt_oss", 3072, 3072, 128, 4, "swiglu", "a8w4", 512)
+    cmdg = harness._aiter_cmd(rpg)
+    assert cmdg[cmdg.index("-q") + 1] == "7"
+    assert "--no-flydsl-csv" in cmdg
+    assert cmdg[cmdg.index("-a") + 1] == "swiglu"
 
 
 # --- run-list coverage (full DEC-6 grid from spec) -------------------------
@@ -176,8 +214,18 @@ def _good_baseline_row(**over):
         "dtype": "a4w4",
         "act": "silu",
         "token": "16",
+        # All AC-1/DEC-2 metric fields present and numeric.
+        "stage1_us": "55.3",
+        "stage2_us": "21.8",
+        "sorting_us": "0.0",
+        "kernel_path_us": "77.1",
+        "kernel_path_us_p95": "79.0",
+        "effective_tflops": "12.3",
+        "mfu": "0.0027",
         "e2e_us": "150.0",
+        "e2e_us_p95": "155.0",
         "logits_diff": "0.0008",
+        "correctness_pass": "True",
     }
     row.update(over)
     return row
@@ -198,6 +246,18 @@ def test_validate_baseline_row_accepts_good_row():
         ({"act": ""}, "missing_act"),
         ({"e2e_us": ""}, "missing_e2e_us"),
         ({"logits_diff": ""}, "missing_logits_diff"),
+        # Hardened metric-field requirements (Codex blocking #2).
+        ({"stage1_us": ""}, "missing_stage1_us"),
+        ({"stage2_us": ""}, "missing_stage2_us"),
+        ({"sorting_us": ""}, "missing_sorting_us"),
+        ({"kernel_path_us": ""}, "missing_kernel_path_us"),
+        ({"kernel_path_us_p95": ""}, "missing_kernel_path_us_p95"),
+        ({"effective_tflops": ""}, "missing_effective_tflops"),
+        ({"mfu": ""}, "missing_mfu"),
+        ({"e2e_us_p95": ""}, "missing_e2e_us_p95"),
+        ({"kernel_path_us": "not-a-number"}, "missing_kernel_path_us"),
+        ({"correctness_pass": "False"}, "correctness_not_passed"),
+        ({"correctness_pass": ""}, "correctness_not_passed"),
         ({"warmup": "2"}, "warmup_mismatch"),
         ({"iters": "5"}, "iters_mismatch"),
         ({"graph_capture": "True"}, "graph_capture_must_be_off"),
@@ -211,7 +271,7 @@ def test_validate_baseline_row_rejections(over, expect):
 
 
 def test_validate_baseline_csv_missing_coverage(tmp_path):
-    # A single valid row is not enough; the full workload must be covered.
+    # A single fully-valid row is not enough; the full workload must be covered.
     out = tmp_path / "baseline.csv"
     p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
     row = harness.PointRow(
@@ -225,15 +285,58 @@ def test_validate_baseline_csv_missing_coverage(tmp_path):
         dtype="a4w4",
         act="silu",
         token=16,
+        stage1_us=55.3,
+        stage2_us=21.8,
+        sorting_us=0.0,
+        kernel_path_us=77.1,
+        kernel_path_us_p95=79.0,
+        effective_tflops=12.3,
+        mfu=0.0027,
         e2e_us=150.0,
+        e2e_us_p95=155.0,
         logits_diff=0.0008,
-        kernel_path_us=100.0,
+        correctness_pass=True,
     )
     harness.write_csv([row], str(out))
     res = harness.validate_baseline_csv(str(out))
     assert res["valid"] is False
     assert res["missing_points"]  # almost all points missing
-    assert res["row_errors"] == {}  # the one present row is itself valid
+    assert res["row_errors"] == {}  # the one present row is itself fully valid
+
+
+def test_validate_baseline_csv_rejects_missing_kernel_metrics(tmp_path):
+    # Codex blocking #2 regression: a full-coverage CSV with e2e/logits present
+    # but kernel metrics empty must NOT validate.
+    out = tmp_path / "baseline.csv"
+    p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
+    rows = []
+    for rp in harness.build_run_list():
+        rows.append(
+            harness.PointRow(
+                provenance=p,
+                command="cmd",
+                model=rp.model,
+                model_dim=rp.model_dim,
+                inter_dim=rp.inter_dim,
+                experts=rp.experts,
+                topk=rp.topk,
+                dtype=rp.dtype,
+                act=rp.act,
+                token=rp.token,
+                # kernel metrics deliberately omitted
+                e2e_us=150.0,
+                e2e_us_p95=155.0,
+                logits_diff=0.0008,
+                correctness_pass=True,
+            )
+        )
+    harness.write_csv(rows, str(out))
+    res = harness.validate_baseline_csv(str(out))
+    assert res["valid"] is False
+    assert not res["missing_points"]  # coverage is complete...
+    assert res["row_errors"]  # ...but rows fail on missing kernel metrics
+    some = next(iter(res["row_errors"].values()))
+    assert "missing_kernel_path_us" in some and "missing_mfu" in some
 
 
 def test_combined_and_metrics():
@@ -546,3 +649,123 @@ def test_compare_csvs_rejects_missing_regime_fields(tmp_path):
     assert ("kimi_k2", "a4w4", "silu", "16384") in cv.incomplete_points
     assert ("kimi_k2", "a4w4", "silu", "128") in cv.incomplete_points
     assert not cv.pareto_clean
+
+
+def test_repeatability_check(tmp_path):
+    a = str(tmp_path / "a.csv")
+    b = str(tmp_path / "b.csv")
+    _csv(
+        a,
+        [
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16384,
+                "kernel_path_us": 1000,
+                "e2e_us": 1200,
+                "mfu": 0.5,
+            },
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16,
+                "kernel_path_us": 100,
+                "e2e_us": 150,
+                "mfu": 0.05,
+            },
+        ],
+    )
+    # b: first point within band (1.5% < 2% and +15us... wait 15us>2us, so need <=max(2%*1000=20us,2us)=20us -> 1015 ok),
+    # second point unstable (+10us on a 100us base -> band=max(2us,2us)=2us, 10>2 -> unstable).
+    _csv(
+        b,
+        [
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16384,
+                "kernel_path_us": 1015,
+                "e2e_us": 1210,
+                "mfu": 0.5,
+            },
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16,
+                "kernel_path_us": 110,
+                "e2e_us": 150,
+                "mfu": 0.05,
+            },
+        ],
+    )
+    res = ledger.repeatability_check(a, b)
+    assert res["n_shared"] == 2
+    assert not res["stable"]  # the 16-token kernel_path drifted > band
+    assert any(u[0] == ("kimi_k2", "a4w4", "silu", "16") for u in res["unstable"]["kernel_path_us"])
+    # 16384 kernel_path within band, e2e within band -> not flagged.
+    assert all(u[0] != ("kimi_k2", "a4w4", "silu", "16384") for u in res["unstable"]["kernel_path_us"])
+
+
+def test_quarantine_and_validated_keys():
+    from kernels import moe_tuning_spec as spec
+
+    # The a8w4 shapes whose aiter legacy path forces Swiglu/interleave are quarantined.
+    assert spec.is_quarantined("deepseek_v4", "a8w4")
+    assert spec.is_quarantined("kimi_k2", "a8w4")
+    assert spec.is_quarantined("gpt_oss", "a8w4")
+    # a4w4 everywhere and DS V3 a8w4 are NOT quarantined.
+    assert not spec.is_quarantined("deepseek_v3", "a8w4")
+    assert not spec.is_quarantined("kimi_k2", "a4w4")
+
+    vkeys = spec.validated_point_keys()
+    # DS V3 a4w4 (16) + DS V3 a8w4 (16) + Kimi a4w4 (16) + GPT-OSS a4w4 (8) = 56.
+    assert len(vkeys) == 56
+    assert ("deepseek_v3", "a8w4", "silu", "1") in vkeys
+    assert ("kimi_k2", "a8w4", "silu", "1") not in vkeys  # quarantined
+    assert ("gpt_oss", "a8w4", "swiglu", "256") not in vkeys  # quarantined
+    # validated subset is a strict subset of the full workload.
+    assert vkeys < harness.expected_point_keys()
+
+
+def test_validate_baseline_csv_subset_keys(tmp_path):
+    # A CSV covering only the validated subset validates against validated keys,
+    # but fails against the full workload (missing the quarantined points).
+    from kernels import moe_tuning_spec as spec
+
+    out = tmp_path / "sub.csv"
+    p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
+    rows = []
+    for key in spec.validated_point_keys():
+        model, dtype, act, token = key
+        rows.append(
+            harness.PointRow(
+                provenance=p,
+                command="cmd",
+                model=model,
+                model_dim=7168,
+                inter_dim=256,
+                experts=257,
+                topk=9,
+                dtype=dtype,
+                act=act,
+                token=int(token),
+                stage1_us=10.0,
+                stage2_us=5.0,
+                sorting_us=0.0,
+                kernel_path_us=15.0,
+                kernel_path_us_p95=15.5,
+                effective_tflops=1.0,
+                mfu=0.01,
+                e2e_us=12.0,
+                e2e_us_p95=12.5,
+                logits_diff=0.0001,
+                correctness_pass=True,
+            )
+        )
+    harness.write_csv(rows, str(out))
+    assert harness.validate_baseline_csv(str(out), expected_keys=spec.validated_point_keys())["valid"] is True
+    assert harness.validate_baseline_csv(str(out))["valid"] is False  # full workload not covered

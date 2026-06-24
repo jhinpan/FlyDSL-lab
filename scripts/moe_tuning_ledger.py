@@ -233,6 +233,34 @@ def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     return cv
 
 
+def repeatability_check(csv_a: str, csv_b: str) -> dict:
+    """Compare two independent sweeps of the SAME config under DEC-2.
+
+    For each shared (model, dtype, act, token) point, a metric is "stable" if the
+    two runs agree within the DEC-2 noise band (NOT a regression in either
+    direction): ``|b - a| <= max(a*REGRESSION_REL, ABS_US_BAND)``.  Returns the
+    set of unstable points per metric; an empty unstable set demonstrates the
+    harness is repeatable (AC-1.1).
+    """
+    a = read_point_csv(csv_a)
+    b = read_point_csv(csv_b)
+    shared = sorted(set(a) & set(b))
+    unstable = {"kernel_path_us": [], "e2e_us": []}
+    band = lambda x: max(abs(x) * spec.REGRESSION_REL, spec.ABS_US_BAND)  # noqa: E731
+    for key in shared:
+        for metric in ("kernel_path_us", "e2e_us"):
+            va, vb = _f(a[key], metric), _f(b[key], metric)
+            if va is None or vb is None:
+                unstable[metric].append((key, "missing"))
+            elif abs(vb - va) > band(va):
+                unstable[metric].append((key, va, vb))
+    return {
+        "n_shared": len(shared),
+        "unstable": unstable,
+        "stable": not unstable["kernel_path_us"] and not unstable["e2e_us"],
+    }
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
@@ -242,6 +270,7 @@ __all__ = [
     "read_point_csv",
     "compare_point",
     "compare_csvs",
+    "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
 ]

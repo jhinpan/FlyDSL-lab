@@ -1,0 +1,16 @@
+{
+  "protocol": {
+    "warmup": 10,
+    "iters": 100,
+    "reps": 2,
+    "band": "max(2%,2us)"
+  },
+  "n_shared": 96,
+  "kernel_path_unstable_all": 0,
+  "e2e_unstable_all": 25,
+  "validated_subset": {
+    "kernel_path_unstable": 0,
+    "e2e_unstable": 11,
+    "note": "kernel-path (primary objective metric) is fully repeatable across runs; e2e drifts up to ~10pct at small tokens with reps=2 (host-dominated, tiny absolute us)."
+  }
+}
