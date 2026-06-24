@@ -97,6 +97,24 @@ def append_attempt(attempt: Attempt, path: str = ATTEMPTS_JSONL, now: Optional[f
     return rec
 
 
+def append_rejected_candidate(record: dict, path: str = ATTEMPTS_JSONL, now: float = None) -> dict:
+    """Append a machine-readable rejected-candidate record to the JSONL ledger.
+
+    ``record`` must carry at least model/dtype/token/config/reason so a rejected
+    search candidate is auditable (the candidate never reached compile/GPU).
+    """
+    required = ("model", "dtype", "token", "config", "reason")
+    missing = [k for k in required if record.get(k) in (None, "")]
+    if missing:
+        raise ValueError(f"rejected-candidate record missing fields: {missing}")
+    rec = {"result": "rejected_candidate", **record}
+    rec["timestamp"] = now if now is not None else time.time()
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(rec, sort_keys=True) + "\n")
+    return rec
+
+
 def read_point_csv(path: str) -> Dict[Tuple, dict]:
     """Read a per-point harness CSV keyed by (model, dtype, token, stage tiles).
 

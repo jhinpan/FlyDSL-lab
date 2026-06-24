@@ -39,11 +39,14 @@ ABS_US_BAND = 2.0  # microseconds; default absolute floor (tokens >= 128).
 # ~3-7 us even after the in-protocol controls are exhausted (faithful L2-flush
 # argument rotation, repeated measurement, AND harness-verified clock pinning).
 # This is irreducible measurement noise at tiny absolute latency, not a harness
-# defect: at an 8 us floor the a4w4 kernel-path repeatability is 0/40 unstable.
-# 8 us is still far below the small-token win threshold (>= 10% AND >= 2 us; 10%
-# of even the smallest ~127 us point is ~12.7 us), so widening the band does NOT
-# weaken win detection.  Floor is regime-aware: 8 us for tokens <= SMALL_TOKEN_MAX,
-# 2 us otherwise.
+# defect: under the 8 us small-token floor the residual a4w4 repeatability
+# instability is confined to a single mid-token point (token 128, under the strict
+# 2 us tokens>=128 floor) plus the e2e guardrail outlier (token 64) -- i.e. the
+# small-token (<=64) kernel-path band is satisfied; tokens >= 128 keep the strict
+# 2 us floor.  8 us is still far below the small-token win threshold (>= 10% AND
+# >= 2 us; 10% of even the smallest ~127 us point is ~12.7 us), so widening the
+# band does NOT weaken win detection.  Floor is regime-aware: 8 us for
+# tokens <= SMALL_TOKEN_MAX, 2 us otherwise.
 SMALL_TOKEN_ABS_US_BAND = 8.0
 
 

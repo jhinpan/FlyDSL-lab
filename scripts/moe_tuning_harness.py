@@ -506,6 +506,42 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
     return tile
 
 
+def prepare_candidate_run(overrides: dict, model=None, dtype=None, tokens=None):
+    """Resolve a fail-closed candidate run: (run_list, per-point tiles).
+
+    Requirements (raises ValueError, recording a machine-readable rejection for
+    illegal tiles, so the caller fails closed WITHOUT writing a partial CSV):
+    - at least one explicit tile override must be given (no silent default-tile
+      fallback for candidate mode);
+    - the selection must match at least one point;
+    - EVERY selected point's tiles must pass the legality filter — the first
+      illegal point aborts the whole run (a candidate run must be all-legal).
+    """
+    import moe_tuning_ledger as _ledger
+
+    if not any(v is not None for v in overrides.values()):
+        raise ValueError("candidate mode requires at least one explicit --tile-* override")
+    run_list = select_run_points(model=model, dtype=dtype, tokens=tokens)
+    if not run_list:
+        raise ValueError("candidate selection matched no points")
+    tiles = []
+    for rp in run_list:
+        try:
+            tiles.append(candidate_tile_for(rp, overrides))
+        except ValueError as e:
+            _ledger.append_rejected_candidate(
+                {
+                    "model": rp.model,
+                    "dtype": rp.dtype,
+                    "token": rp.token,
+                    "config": {k: overrides.get(k) for k in overrides},
+                    "reason": str(e),
+                }
+            )
+            raise ValueError(f"illegal candidate at {rp.model}/{rp.dtype} t={rp.token}: {e}") from e
+    return run_list, tiles
+
+
 # --- baseline validation gate (the baseline contract negative tests) ------------------------
 
 # The locked baseline must come from this exact commit (DEC scope).
@@ -951,34 +987,26 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "tile_n2": args.tile_n2,
         "tile_k2": args.tile_k2,
     }
-    has_overrides = any(v is not None for v in overrides.values())
 
     if args.mode == "candidate":
-        toks = None
-        if args.tokens:
-            toks = [int(t) for t in args.tokens.replace(",", " ").split()]
-        run_list = select_run_points(model=args.model, dtype=args.dtype, tokens=toks)
-        if not run_list:
-            print("ERROR: candidate selection matched no points", file=sys.stderr)
+        toks = [int(t) for t in args.tokens.replace(",", " ").split()] if args.tokens else None
+        try:
+            run_list, tiles = prepare_candidate_run(overrides, model=args.model, dtype=args.dtype, tokens=toks)
+        except ValueError as e:
+            # Fail closed: do not write a partial CSV; rejection already recorded.
+            print(f"ERROR: candidate run rejected: {e}", file=sys.stderr)
             return 2
-
-        def tile_fn(rp):
-            return candidate_tile_for(rp, overrides) if has_overrides else default_tile_for(rp)
-
+        rows = [
+            run_point(rp, tiles[i], args.gpu, prov, measure_e2e=not args.no_e2e, reps=args.reps)
+            for i, rp in enumerate(run_list)
+        ]
     else:  # baseline: full grid, default tiles
         run_list = build_run_list()
+        rows = [
+            run_point(rp, default_tile_for(rp), args.gpu, prov, measure_e2e=not args.no_e2e, reps=args.reps)
+            for rp in run_list
+        ]
 
-        def tile_fn(rp):
-            return default_tile_for(rp)
-
-    rows = []
-    for rp in run_list:
-        try:
-            tile = tile_fn(rp)
-        except ValueError as e:
-            print(f"  SKIP {rp.model}/{rp.dtype} t={rp.token}: {e}", flush=True)
-            continue
-        rows.append(run_point(rp, tile, args.gpu, prov, measure_e2e=not args.no_e2e, reps=args.reps))
     out = args.out or f"/tmp/moe_{args.mode}.csv"
     write_csv(rows, out)
     print(f"wrote {len(rows)} rows -> {out}")
@@ -1009,6 +1037,7 @@ __all__ = [
     "expected_point_keys",
     "select_run_points",
     "candidate_tile_for",
+    "prepare_candidate_run",
     "default_tile_for",
     "validate_baseline_row",
     "validate_baseline_csv",

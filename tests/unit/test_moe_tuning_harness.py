@@ -1108,3 +1108,33 @@ def test_candidate_tile_for_overrides_and_legality():
 
     with _pytest.raises(ValueError):
         harness.candidate_tile_for(rp, {"tile_m1": 16})
+
+
+def test_prepare_candidate_run_fail_closed(tmp_path, monkeypatch):
+    # candidate run is fail-closed: requires explicit tiles, all-legal, non-empty.
+    import moe_tuning_ledger as _ledger
+    import pytest as _pytest
+
+    # Capture rejected-candidate records instead of writing to the real ledger.
+    captured = []
+    monkeypatch.setattr(_ledger, "append_rejected_candidate", lambda rec, **k: captured.append(rec) or rec)
+
+    no_override = {k: None for k in ("tile_m1", "tile_n1", "tile_k1", "tile_n2", "tile_k2")}
+    # (1) no explicit tile -> reject (no silent default-tile fallback).
+    with _pytest.raises(ValueError, match="at least one explicit"):
+        harness.prepare_candidate_run(no_override, model="deepseek_v3", dtype="a4w4", tokens=[16])
+
+    # (2) legal explicit tile -> returns (run_list, tiles) of equal length.
+    ov = dict(no_override, tile_n1=128)
+    rl, tiles = harness.prepare_candidate_run(ov, model="deepseek_v3", dtype="a4w4", tokens=[16, 64])
+    assert len(rl) == len(tiles) == 2 and all(t["tile_n1"] == 128 for t in tiles)
+
+    # (3) illegal explicit tile -> raise AND record a machine-readable rejection.
+    bad = dict(no_override, tile_m1=16)  # fp4 tile_m<32 illegal
+    with _pytest.raises(ValueError, match="illegal candidate"):
+        harness.prepare_candidate_run(bad, model="deepseek_v3", dtype="a4w4", tokens=[16])
+    assert captured and captured[-1]["reason"] and captured[-1]["model"] == "deepseek_v3"
+
+    # (4) empty selection -> reject.
+    with _pytest.raises(ValueError, match="matched no points"):
+        harness.prepare_candidate_run(ov, model="nonesuch", dtype="a4w4", tokens=[16])

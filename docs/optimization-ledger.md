@@ -20,8 +20,11 @@ file is the human-facing running log.
   activation passes). Root cause is an aiter-wrapper/layout contract mismatch for
   non-fp4 activation (NOT a FlyDSL kernel bug — this checkout's own
   `tests/kernels/test_moe_gemm.py --in_dtype a8w4` passes); fixing it is
-  aiter-environment work outside the GEMM-tuning scope. a8w4 is quarantined
-  pending a user scope decision — no a8w4 win may be claimed until it is green.
+  aiter-environment work outside the GEMM-tuning scope. a8w4 is quarantined;
+  per the user-RESOLVED DEC-10 this campaign tunes a4w4 and DEFERS a8w4 (and the
+  a8w4-only DeepSeek V4) with this reason; the aiter-wrapper fix is a stretch
+  (DEC-10b) only if rounds remain after the a4w4 Pareto goal. No a8w4 win may be
+  claimed until a8w4 e2e correctness is green.
 - fp4 peak (MFU denominator): **4523 TFLOPS** (empirical ceiling on this node).
 - Metric formula: `effective_tflops = token*model_dim*inter_dim*3*topk*2 / combined_us / 1e6`;
   `mfu = effective_tflops / 4523`. Combined kernel-path us = stage1 + stage2 + sorting.
@@ -55,26 +58,35 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
-### Candidate (small-token win) — DeepSeek V3 a4w4, stage1 `tile_n=128`
+### Candidate (PARTIAL DS-V3-subset small-token improvement) — DeepSeek V3 a4w4, stage1 `tile_n=128`
+
+NOTE: this is a **partial** improvement, NOT a confirmed AC-4 win and NOT AC-3.
+(Corrected after the Round-1 review caught an overclaim.)
 
 - Lever: stage1 `tile_n` 256 → 128 (stage2 and stage1 tile_m/tile_k unchanged).
 - Scope: a4w4 (per DEC-10). Protocol: warmup=10/iters=100, reps=3, clocks
-  harness-verified pinned, regime-aware band (DEC-9).
-- Result: **small-token kernel-path latency win** — tokens 1/2/4/8/16 are
-  −23.0 / −21.0 / −20.6 / −19.5 / −15.6% vs baseline, all clearing the DEC-1
-  small-token gate (≥10% AND ≥ the 8µs small-token band). **Zero Pareto
-  regression** across the full DS V3 a4w4 token sweep (`is_regression` token-aware,
-  0 regressing points). Mid tokens 256–1024 also ~11–13% faster (bonus).
-- Large-MFU target buckets (MFU improvement = kernel-path latency reduction at
-  fixed shape): 16384 latency −9.2% → **MFU +10.1%** (clears the AC-3 10% margin
-  at this single bucket), 32768 latency −5.5% → **MFU +5.8%** (below). AC-3
-  requires BOTH target buckets (16384 AND 32768), so DS V3 does NOT yet satisfy
-  AC-3 — this remains an AC-4 (small-token) candidate.
-- Correctness: FlyDSL-side reference clean (`--skip_ref false`, atomic+reduce
-  stage2). The strict aiter e2e correctness gate (`logits_diff <= 0.01`) and a
-  clean re-run for stability remain to be run before this is a *confirmed* win.
-- Artifacts: `docs/candidate_dsv3_a4w4_stage1n128.csv` (full per-point sweep);
-  candidate matrix logged in `docs/attempts.jsonl`.
+  harness-verified pinned, regime-aware band (DEC-9). Two independent e2e sweeps
+  via the candidate CLI; strict aiter e2e + AOT-cache ran (`aot_status=checked`),
+  correctness pass (logits ≤ 0.0016 all 16 points).
+- Small-token results (per the committed CSVs; latency % / MFU %):
+  - token 1: −23.7% / +31.1%  ✓ clears the gate
+  - token 16: −15.8% / +18.7% ✓ clears (tokens 1,2,4,8,16 all clear)
+  - **token 32: −5.1% / +5.4%  ✗ FAILS the 10% gate**
+  - **token 64: −3.9% / +4.1%  ✗ FAILS the 10% gate**
+  AC-4 applies to the small-token set {1,2,4,8,16,32,64}; since 32 and 64 do NOT
+  clear the 10% gate, this is **NOT a complete AC-4 win** — only a partial
+  small-token (tokens 1–16) improvement.
+- Large-MFU target buckets: **16384 MFU +9.75%** (BELOW the 10% margin, in both
+  runs), **32768 MFU +5.80%** (below). `compare_csvs` reports no `large_wins`.
+  → **NOT AC-3**.
+- Pareto: `compare_csvs` over the **DS-V3-subset** baseline is coverage_complete +
+  pareto_clean (0 regressions, kernel-path AND e2e), re-run stable on the win
+  points. This is a DS-V3-subset statement only — the **full validated a4w4
+  comparison is still missing 24 points** (Kimi K2 + GPT-OSS not yet swept), so it
+  is NOT the plan's full a4w4 Pareto gate.
+- Artifacts: `docs/candidate_dsv3_a4w4_stage1n128.csv` (run1, full per-point with
+  e2e+correctness+aot), `docs/candidate_dsv3_a4w4_stage1n128_run2.csv` (stability
+  re-run); candidates + the exact sweep command logged in `docs/attempts.jsonl`.
 
 ### Baseline — locked ref `523ca1c7` (strict path)
 
