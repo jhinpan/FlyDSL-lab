@@ -793,6 +793,116 @@ def test_compare_csvs_detects_regression_and_wins(tmp_path):
     assert ("kimi_k2", "a4w4", "silu", "16") in cv.small_wins
 
 
+def _gated_compare_csv(path, rows):
+    """Write a candidate/baseline CSV that ALSO carries the gate columns."""
+    import csv as _c
+
+    cols = [
+        "model",
+        "dtype",
+        "act",
+        "token",
+        "kernel_path_us",
+        "e2e_us",
+        "mfu",
+        "aot_status",
+        "correctness_pass",
+        "logits_diff",
+    ]
+    with open(path, "w", newline="") as f:
+        w = _c.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
+def _two_point_baseline_and_candidate(tmp_path, aot_status):
+    """A fully-covered, non-regressing, otherwise-WINNING 2-point candidate whose
+    gate columns are parameterized by ``aot_status``."""
+    base = str(tmp_path / "base.csv")
+    cand = str(tmp_path / "cand.csv")
+    bl = [
+        dict(
+            model="kimi_k2",
+            dtype="a4w4",
+            act="silu",
+            token=16384,
+            kernel_path_us=1000,
+            e2e_us=1200,
+            mfu=0.50,
+            aot_status="checked",
+            correctness_pass=True,
+            logits_diff=0.001,
+        ),
+        dict(
+            model="kimi_k2",
+            dtype="a4w4",
+            act="silu",
+            token=16,
+            kernel_path_us=100,
+            e2e_us=150,
+            mfu=0.05,
+            aot_status="checked",
+            correctness_pass=True,
+            logits_diff=0.001,
+        ),
+    ]
+    # candidate: +12% MFU at 16384 (large win), 20% faster at 16 (small win), no regressions
+    cd = [
+        dict(
+            model="kimi_k2",
+            dtype="a4w4",
+            act="silu",
+            token=16384,
+            kernel_path_us=950,
+            e2e_us=1180,
+            mfu=0.56,
+            aot_status=aot_status,
+            correctness_pass=True,
+            logits_diff=0.001,
+        ),
+        dict(
+            model="kimi_k2",
+            dtype="a4w4",
+            act="silu",
+            token=16,
+            kernel_path_us=80,
+            e2e_us=150,
+            mfu=0.05,
+            aot_status=aot_status,
+            correctness_pass=True,
+            logits_diff=0.001,
+        ),
+    ]
+    _gated_compare_csv(base, bl)
+    _gated_compare_csv(cand, cd)
+    return base, cand
+
+
+def test_claimable_win_blocks_no_aot_winning_candidate(tmp_path):
+    # The leak Codex flagged: an otherwise-winning, fully-covered, non-regressing
+    # candidate measured with --no-aot-check must NOT be promotable.
+    base, cand = _two_point_baseline_and_candidate(tmp_path, aot_status="no_aot")
+    cv = ledger.compare_csvs(base, cand)
+    # metrics still look winning...
+    assert cv.pareto_clean is True
+    assert cv.large_wins and cv.small_wins
+    # ...but the hard gate fails, so the candidate is NOT claimable.
+    assert cv.gate["passed"] is False
+    assert cv.claimable_win is False
+    # and the standalone gate agrees.
+    assert ledger.selected_candidate_gate(cand)["passed"] is False
+
+
+def test_claimable_win_allows_checked_correct_candidate(tmp_path):
+    base, cand = _two_point_baseline_and_candidate(tmp_path, aot_status="checked")
+    cv = ledger.compare_csvs(base, cand)
+    assert cv.pareto_clean is True
+    assert cv.large_wins and cv.small_wins
+    assert cv.gate["passed"] is True
+    assert cv.claimable_win is True
+
+
 def test_compare_csvs_rejects_cherry_picked_candidate(tmp_path):
     # Baseline has 3 points; candidate reports only the single winning large
     # point and omits the others.  Coverage must be incomplete and the verdict

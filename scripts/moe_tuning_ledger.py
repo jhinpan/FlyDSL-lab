@@ -242,6 +242,11 @@ class CampaignVerdict:
     small_wins: List[Tuple] = field(default_factory=list)
     missing_candidate_points: List[Tuple] = field(default_factory=list)
     incomplete_points: List[Tuple] = field(default_factory=list)
+    # Strict correctness + AOT-cache hard gate over the candidate CSV
+    # (``selected_candidate_gate`` output).  Populated by ``compare_csvs``; a
+    # candidate that fails this gate (e.g. ``aot_status=no_aot``) can never be a
+    # claimable win even if its metrics look winning.
+    gate: dict = field(default_factory=lambda: {"passed": False, "n_rows": 0, "violations": []})
 
     @property
     def coverage_complete(self) -> bool:
@@ -255,6 +260,19 @@ class CampaignVerdict:
         or e2e.  Incomplete/cherry-picked candidate CSVs can never be clean."""
         return self.coverage_complete and not self.any_regression
 
+    @property
+    def claimable_win(self) -> bool:
+        """The SINGLE source of truth for whether a candidate may be promoted to a
+        win.  True only when ALL hold:
+        - ``pareto_clean`` (full coverage + no kernel-path/e2e regression),
+        - at least one target-bucket or small-token win is present, and
+        - the strict correctness + AOT-cache hard gate passed
+          (``aot_status=checked`` + correctness + ``logits_diff<=0.01`` on every
+          row) -- so a ``no_aot`` / failed-correctness candidate is never claimable
+          regardless of how good its metrics look.
+        Re-run stability is enforced separately by re-running and re-comparing."""
+        return self.pareto_clean and bool(self.large_wins or self.small_wins) and bool(self.gate.get("passed"))
+
 
 def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     """Full per-point Pareto comparison of a candidate vs the locked baseline.
@@ -265,13 +283,17 @@ def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     point; mfu for large target buckets), makes ``coverage_complete`` False, which
     forces ``pareto_clean`` False.
 
-    A win is only claimable when ``pareto_clean`` holds (the no-regression policy + full coverage)
-    AND at least one target-bucket / small-token win is present (the win-margin policy).
-    Re-run-stability is enforced separately by re-running and re-comparing.
+    The candidate is run through ``selected_candidate_gate`` and the result is
+    stored on the verdict.  ``CampaignVerdict.claimable_win`` is the single source
+    of truth for promotability: it requires ``pareto_clean`` + at least one win +
+    the gate (``aot_status=checked`` + correctness + ``logits_diff<=0.01``).  Do
+    NOT promote a candidate from ``pareto_clean`` + win lists alone -- a ``no_aot``
+    candidate can be pareto_clean with wins yet must not be claimable.
     """
     base = read_point_csv(baseline_csv)
     cand = read_point_csv(candidate_csv)
     cv = CampaignVerdict()
+    cv.gate = selected_candidate_gate(candidate_csv)
     for key, b_row in base.items():
         token = int(float(b_row.get("token") or 0))
         c_row = cand.get(key)

@@ -51,6 +51,13 @@ file is the human-facing running log.
 
 ## Rules
 
+- **A win is claimable only when `compare_csvs(...).claimable_win` is True** — the
+  single source of truth. That requires `pareto_clean` (full coverage + no
+  kernel-path/e2e regression) AND at least one large/small win AND the
+  selected-candidate hard gate (`aot_status=checked` + `correctness_pass` +
+  `logits_diff<=0.01` on every row). `pareto_clean` + populated win lists alone is
+  NOT sufficient: a `no_aot` (or failed-correctness) candidate can be pareto_clean
+  with wins yet must never be promoted.
 - No win claimed from a single noisy near-threshold run; a win must hold across
   the full per-point table and a clean re-run within the noise band.
 - One candidate change at a time unless coupling is technically necessary.
