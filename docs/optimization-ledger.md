@@ -55,6 +55,25 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
+### Candidate (small-token win) — DeepSeek V3 a4w4, stage1 `tile_n=128`
+
+- Lever: stage1 `tile_n` 256 → 128 (stage2 and stage1 tile_m/tile_k unchanged).
+- Scope: a4w4 (per DEC-10). Protocol: warmup=10/iters=100, reps=3, clocks
+  harness-verified pinned, regime-aware band (DEC-9).
+- Result: **small-token kernel-path latency win** — tokens 1/2/4/8/16 are
+  −23.0 / −21.0 / −20.6 / −19.5 / −15.6% vs baseline, all clearing the DEC-1
+  small-token gate (≥10% AND ≥ the 8µs small-token band). **Zero Pareto
+  regression** across the full DS V3 a4w4 token sweep (`is_regression` token-aware,
+  0 regressing points). Mid tokens 256–1024 also ~11–13% faster (bonus).
+- Large-MFU target buckets improved but **below** the AC-3 10% margin:
+  16384 = −9.2%, 32768 = −5.5% — so this is an AC-4 (small-token) candidate, not
+  yet an AC-3 (large-shape) win.
+- Correctness: FlyDSL-side reference clean (`--skip_ref false`, atomic+reduce
+  stage2). The strict aiter e2e correctness gate (`logits_diff <= 0.01`) and a
+  clean re-run for stability remain to be run before this is a *confirmed* win.
+- Artifacts: `docs/candidate_dsv3_a4w4_stage1n128.csv` (full per-point sweep);
+  candidate matrix logged in `docs/attempts.jsonl`.
+
 ### Baseline — locked ref `523ca1c7` (strict path)
 
 - Result: `baseline` (reference table; not a tuning attempt).
