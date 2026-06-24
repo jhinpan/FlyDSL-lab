@@ -489,6 +489,54 @@ def test_attempt_append_roundtrip(tmp_path):
     assert len(lines) == 1 and '"result": "win"' in lines[0]
 
 
+def _complete_rejected(**over):
+    base = dict(
+        model="kimi_k2",
+        dtype="a4w4",
+        act="silu",
+        token=64,
+        stage=0,
+        config={"tile_m1": 16},
+        reason="illegal candidate tiles: s1=fp4 tile_m<32",
+        gpu_id="0",
+        gpu_model="MI350X",
+        branch="b",
+        commit="c",
+        command="python3 scripts/moe_tuning_harness.py candidate --tile-m1 16",
+        warmup=10,
+        iters=100,
+    )
+    base.update(over)
+    return base
+
+
+def test_rejected_candidate_full_provenance_roundtrip(tmp_path):
+    path = str(tmp_path / "attempts.jsonl")
+    rec = ledger.append_rejected_candidate(_complete_rejected(), path=path, now=7.0)
+    assert rec["result"] == "rejected_candidate" and rec["timestamp"] == 7.0
+    # stage 0 is a valid value (candidate-tile rejection spanning both stages).
+    rec0 = ledger.append_rejected_candidate(_complete_rejected(stage=0), path=path, now=8.0)
+    assert rec0["stage"] == 0
+    lines = open(path).read().strip().splitlines()
+    assert len(lines) == 2
+
+
+def test_rejected_candidate_missing_provenance_rejected(tmp_path):
+    path = str(tmp_path / "attempts.jsonl")
+    # Each required provenance field, when missing, must be refused.
+    for field in ("act", "gpu_id", "gpu_model", "branch", "commit", "command", "warmup", "iters"):
+        bad = _complete_rejected(**{field: ""})
+        with pytest.raises(ValueError, match="missing fields"):
+            ledger.append_rejected_candidate(bad, path=path)
+    # The minimal-only record (the old contract) is now rejected.
+    with pytest.raises(ValueError, match="missing fields"):
+        ledger.append_rejected_candidate(
+            {"model": "kimi_k2", "dtype": "a4w4", "token": 64, "config": {}, "reason": "x"}, path=path
+        )
+    # No partial file should have been written.
+    assert not os.path.exists(path)
+
+
 def _csv(path, rows):
     import csv as _c
 
@@ -1129,11 +1177,22 @@ def test_prepare_candidate_run_fail_closed(tmp_path, monkeypatch):
     rl, tiles = harness.prepare_candidate_run(ov, model="deepseek_v3", dtype="a4w4", tokens=[16, 64])
     assert len(rl) == len(tiles) == 2 and all(t["tile_n1"] == 128 for t in tiles)
 
-    # (3) illegal explicit tile -> raise AND record a machine-readable rejection.
+    # (3) illegal explicit tile -> raise AND record a machine-readable rejection
+    #     carrying the full provenance class (act/stage/branch/commit/command/...).
     bad = dict(no_override, tile_m1=16)  # fp4 tile_m<32 illegal
+    prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
     with _pytest.raises(ValueError, match="illegal candidate"):
-        harness.prepare_candidate_run(bad, model="deepseek_v3", dtype="a4w4", tokens=[16])
-    assert captured and captured[-1]["reason"] and captured[-1]["model"] == "deepseek_v3"
+        harness.prepare_candidate_run(
+            bad, model="deepseek_v3", dtype="a4w4", tokens=[16], prov=prov, command="python3 harness candidate ..."
+        )
+    rec = captured[-1]
+    assert rec and rec["reason"] and rec["model"] == "deepseek_v3"
+    # Every full-provenance field is present and non-empty (stage 0 is valid).
+    for k in ("act", "gpu_id", "gpu_model", "branch", "commit", "command", "warmup", "iters", "selection"):
+        assert rec.get(k) not in (None, ""), k
+    assert rec["stage"] == 0 and rec["act"] == "silu"
+    # The record satisfies the ledger's own rejected-candidate contract.
+    assert not [f for f in _ledger.REQUIRED_REJECTED_FIELDS if rec.get(f) in (None, "")]
 
     # (4) empty selection -> reject.
     with _pytest.raises(ValueError, match="matched no points"):

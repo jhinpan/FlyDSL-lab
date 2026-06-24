@@ -53,6 +53,29 @@ REQUIRED_ATTEMPT_FIELDS = (
     "result",
 )
 
+# A rejected search candidate never reaches compile/GPU, so it has no measured
+# metrics (csv_path/profile_path stay empty), but it MUST still carry the same
+# identity + run-provenance class as a measured attempt so the rejection is
+# auditable (the rejected-candidate ledger contract).  ``stage`` is 0 when the
+# rejection is at the candidate-tile level spanning both stages; the reason
+# string still names the offending stage.
+REQUIRED_REJECTED_FIELDS = (
+    "model",
+    "dtype",
+    "act",
+    "token",
+    "stage",
+    "config",
+    "reason",
+    "gpu_id",
+    "gpu_model",
+    "branch",
+    "commit",
+    "command",
+    "warmup",
+    "iters",
+)
+
 
 @dataclass
 class Attempt:
@@ -100,11 +123,15 @@ def append_attempt(attempt: Attempt, path: str = ATTEMPTS_JSONL, now: Optional[f
 def append_rejected_candidate(record: dict, path: str = ATTEMPTS_JSONL, now: float = None) -> dict:
     """Append a machine-readable rejected-candidate record to the JSONL ledger.
 
-    ``record`` must carry at least model/dtype/token/config/reason so a rejected
-    search candidate is auditable (the candidate never reached compile/GPU).
+    ``record`` must carry the full provenance class (``REQUIRED_REJECTED_FIELDS``)
+    so a rejected search candidate is as auditable as a measured attempt — even
+    though it never reached compile/GPU and therefore has no measured metrics
+    (``csv_path``/``profile_path`` may be absent/empty).  Raises ``ValueError`` if
+    any required field is missing, so an incomplete rejection can never be
+    recorded (the rejected-candidate contract negative gate).
     """
-    required = ("model", "dtype", "token", "config", "reason")
-    missing = [k for k in required if record.get(k) in (None, "")]
+    # Treat only None / "" as missing — integer 0 (stage, warmup, iters) is valid.
+    missing = [k for k in REQUIRED_REJECTED_FIELDS if record.get(k) in (None, "")]
     if missing:
         raise ValueError(f"rejected-candidate record missing fields: {missing}")
     rec = {"result": "rejected_candidate", **record}

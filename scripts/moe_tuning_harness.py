@@ -506,7 +506,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
     return tile
 
 
-def prepare_candidate_run(overrides: dict, model=None, dtype=None, tokens=None):
+def prepare_candidate_run(overrides: dict, model=None, dtype=None, tokens=None, prov=None, command=""):
     """Resolve a fail-closed candidate run: (run_list, per-point tiles).
 
     Requirements (raises ValueError, recording a machine-readable rejection for
@@ -516,6 +516,12 @@ def prepare_candidate_run(overrides: dict, model=None, dtype=None, tokens=None):
     - the selection must match at least one point;
     - EVERY selected point's tiles must pass the legality filter — the first
       illegal point aborts the whole run (a candidate run must be all-legal).
+
+    ``prov`` (a ``Provenance``) and ``command`` (the exact top-level invocation)
+    supply the run-provenance class carried by every rejected-candidate record so
+    a rejection is as auditable as a measured attempt.  When ``prov`` is None the
+    git branch/commit are still resolved (host-side path), so the record stays
+    complete; GPU identity is then left to the caller's monkeypatch/tests.
     """
     import moe_tuning_ledger as _ledger
 
@@ -524,6 +530,18 @@ def prepare_candidate_run(overrides: dict, model=None, dtype=None, tokens=None):
     run_list = select_run_points(model=model, dtype=dtype, tokens=tokens)
     if not run_list:
         raise ValueError("candidate selection matched no points")
+    # Provenance shared by every rejection from this run (filled from prov + git).
+    git = git_provenance()
+    base_prov = {
+        "gpu_id": getattr(prov, "gpu_id", "") or "",
+        "gpu_model": getattr(prov, "gpu_model", "") or "",
+        "branch": getattr(prov, "branch", "") or git.get("branch", ""),
+        "commit": getattr(prov, "commit", "") or git.get("commit", ""),
+        "warmup": getattr(prov, "warmup", spec.WARMUP_ITERS),
+        "iters": getattr(prov, "iters", spec.BENCH_ITERS),
+        "command": command,
+        "selection": {"model": model, "dtype": dtype, "tokens": list(tokens) if tokens else None},
+    }
     tiles = []
     for rp in run_list:
         try:
@@ -531,9 +549,12 @@ def prepare_candidate_run(overrides: dict, model=None, dtype=None, tokens=None):
         except ValueError as e:
             _ledger.append_rejected_candidate(
                 {
+                    **base_prov,
                     "model": rp.model,
                     "dtype": rp.dtype,
+                    "act": rp.act,
                     "token": rp.token,
+                    "stage": 0,  # candidate-tile rejection spans both stages; reason names the stage
                     "config": {k: overrides.get(k) for k in overrides},
                     "reason": str(e),
                 }
@@ -990,8 +1011,11 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
 
     if args.mode == "candidate":
         toks = [int(t) for t in args.tokens.replace(",", " ").split()] if args.tokens else None
+        top_command = "python3 " + " ".join([os.path.relpath(__file__, _REPO_ROOT), *(argv or sys.argv[1:])])
         try:
-            run_list, tiles = prepare_candidate_run(overrides, model=args.model, dtype=args.dtype, tokens=toks)
+            run_list, tiles = prepare_candidate_run(
+                overrides, model=args.model, dtype=args.dtype, tokens=toks, prov=prov, command=top_command
+            )
         except ValueError as e:
             # Fail closed: do not write a partial CSV; rejection already recorded.
             print(f"ERROR: candidate run rejected: {e}", file=sys.stderr)
