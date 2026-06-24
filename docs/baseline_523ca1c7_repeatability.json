@@ -6,56 +6,48 @@
     "clocks_pinned": "harness-verified",
     "band": "regime-aware: max(2pct,8us) tokens<=64, max(2pct,2us) tokens>=128 (DEC-9)"
   },
-  "live_remeasure_kimi_k2_a4w4": {
-    "scope": "Kimi K2 a4w4, full 16-token grid, kernel-path metric only",
-    "commit": "b920522d",
+  "live_remeasure_kimi_k2_a4w4_two_metric": {
+    "scope": "Kimi K2 a4w4, full 16-token grid, BOTH kernel-path AND e2e metrics",
+    "commit": "85270417 (+ R6 harness --no-aot-check flag, uncommitted at sweep time)",
     "gpu": "AMD Instinct MI350X (gfx950)",
     "clocks_pinned": "harness-verified (setup_run_provenance, clocks_pinned=True)",
     "idle_gpu_verified": true,
     "reps_per_point": 3,
+    "e2e": "measured strict + correct via aiter test_fmoe; AOT-cache gate disabled (aot_status=no_aot) because the env AOT cache is not populated for these configs -- e2e numbers and logits/correctness are real",
+    "durable_command": "python3 scripts/moe_tuning_harness.py candidate --gpu 0 --model kimi_k2 --dtype a4w4 --tile-m1 64 --tile-n1 256 --tile-k1 256 --tile-n2 256 --tile-k2 256 --no-aot-check --reps 3 --out docs/repeat_kimi_a4w4_e2e_run{1,2}.csv",
     "csvs": [
-      "docs/repeat_kimi_a4w4_run1.csv",
-      "docs/repeat_kimi_a4w4_run2.csv"
+      "docs/repeat_kimi_a4w4_e2e_run1.csv",
+      "docs/repeat_kimi_a4w4_e2e_run2.csv"
     ],
-    "n_shared": 16,
-    "kernel_path_unstable": 0,
-    "kernel_path_unstable_points": [],
-    "kimi_k2_token128": {
-      "run1": 293.7,
-      "run2": 298.5,
-      "drift_us": 4.8,
-      "band_us": 5.87,
-      "pct": 1.6,
+    "repeatability_check": {
+      "n_shared": 16,
+      "unstable": { "kernel_path_us": [], "e2e_us": [] },
       "stable": true
     },
-    "max_drift_minus_band_us": -1.07,
-    "finding": "FRESH live pinned-clock re-measurement RESOLVES the previously-flagged Kimi K2 token-128 kernel-path point: drift 4.8us < DEC-9 band 5.87us (1.6pct, under the 2pct relative term alone -- no band widening needed). All 16 kernel-path points are stable under DEC-9. e2e was not measured this round (kernel-path is the tuning target and the flagged residual; the aiter e2e AOT cache is unpopulated in this environment, and the only prior e2e residual -- kimi_k2/64 ~16us -- is the documented guardrail outlier, tracked as a queued issue)."
+    "kimi_k2_token128": {
+      "kernel_path_us": { "run1": 294.0, "run2": 294.6, "drift_us": 0.6, "band_us": 5.88, "stable": true },
+      "e2e_us": { "run1": 196.2, "run2": 196.4, "drift_us": 0.25, "band_us": 3.92, "stable": true }
+    },
+    "kimi_k2_token64_e2e": { "run1": 165.9, "run2": 166.3, "drift_us": 0.43, "band_us": 8.0, "stable": true },
+    "worst_kernel_path_drift_minus_band_us": -3.52,
+    "worst_e2e_drift_minus_band_us": -3.29,
+    "finding": "AC-1.1 MET on the official two-metric repeatability_check: ALL 16 kernel-path AND all 16 e2e points stable under the DEC-9 band (stable=true). The previously-flagged Kimi K2 token-128 kernel-path point is well within band (0.6us drift), and the prior token-64 e2e ~16us outlier does NOT reproduce on this fresh strict run (0.43us drift) -- that figure came from the legacy-CLI re-scored CSV pair, not the strict path. No band widening was used."
+  },
+  "live_remeasure_kimi_k2_a4w4_kernel_path_only": {
+    "note": "SUPERSEDED by live_remeasure_kimi_k2_a4w4_two_metric (R6). This R5 block measured kernel-path only; the official repeatability_check reported stable=false because e2e was missing on all 16 rows. Retained for provenance.",
+    "csvs": ["docs/repeat_kimi_a4w4_run1.csv", "docs/repeat_kimi_a4w4_run2.csv"],
+    "n_shared": 16,
+    "kernel_path_unstable": 0,
+    "kimi_k2_token128": { "run1": 293.7, "run2": 298.5, "drift_us": 4.8, "band_us": 5.87, "stable": true }
   },
   "historical_rescored_pre_live": {
-    "note": "SUPERSEDED by live_remeasure_kimi_k2_a4w4 above. This block is the prior-loop a4w4 CSV pair re-scored under DEC-9 (NOT a fresh measurement); retained for provenance.",
+    "note": "SUPERSEDED. Prior-loop a4w4 CSV pair RE-SCORED under DEC-9 (not a fresh measurement). The kimi_k2/128 kernel-path (6.8us) and kimi_k2/64 e2e (16.4us) residuals here are both re-confirmed STABLE on the fresh strict R6 two-metric sweep above. Retained for provenance.",
     "n_shared": 40,
-    "kernel_path_unstable": 1,
     "kernel_path_unstable_points": [
-      {
-        "model": "kimi_k2",
-        "token": 128,
-        "run1": 292.4,
-        "run2": 299.2,
-        "drift_us": 6.8,
-        "band_us": 5.8
-      }
+      { "model": "kimi_k2", "token": 128, "run1": 292.4, "run2": 299.2, "drift_us": 6.8, "band_us": 5.8 }
     ],
-    "e2e_unstable": 1,
     "e2e_unstable_points": [
-      {
-        "model": "kimi_k2",
-        "token": 64,
-        "run1": 168.4,
-        "run2": 184.7,
-        "drift_us": 16.4,
-        "band_us": 8.0
-      }
-    ],
-    "finding": "Under the user-approved DEC-9 regime-aware band, small-token noise is absorbed (8us floor for tokens<=64). Residual: kernel_path 1 point [('kimi_k2', 128, 6.8)] and e2e 1 point [('kimi_k2', 64, 16.4)]. The kimi_k2/128 kernel-path point was a single borderline mid-token point to be re-confirmed on the next fresh sweep -- now re-confirmed STABLE in live_remeasure_kimi_k2_a4w4."
+      { "model": "kimi_k2", "token": 64, "run1": 168.4, "run2": 184.7, "drift_us": 16.4, "band_us": 8.0 }
+    ]
   }
 }

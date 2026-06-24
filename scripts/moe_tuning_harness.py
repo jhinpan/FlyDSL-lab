@@ -843,6 +843,7 @@ def run_point(
     provenance: Provenance,
     measure_e2e: bool = True,
     reps: int = 3,
+    check_aot: bool = True,
 ) -> PointRow:  # pragma: no cover - exercised only on the gfx950 node
     """Measure one workload point: FlyDSL per-stage us + aiter e2e/correctness.
 
@@ -857,15 +858,23 @@ def run_point(
     per-point p95 is the timed-loop p95 (median of the per-rep p95 values), NOT a
     dispersion across reps.  ``flydsl_command``, ``strict_error``,
     ``error_category``, and ``aot_status`` are recorded for auditability.
+
+    ``check_aot`` gates the strict aiter AOT-cache check; when False the e2e still
+    runs strict+correct but does not require a pre-populated AOT cache (recorded as
+    ``aot_status="no_aot"``).  ``command`` names ONLY the commands actually executed
+    for this row: the aiter command is appended only when ``measure_e2e`` is True.
     """
     flydsl_cmd = _flydsl_cmd(rp, gpu_id, tile)
-    aiter_cmd = _aiter_cmd(rp)
+    aiter_cmd = _aiter_cmd(rp, check_aot=check_aot)
     # The FlyDSL benchmark must emit its true per-iteration distribution; the env
     # is part of the reproducible command provenance (a replay must set it too).
     flydsl_env = {"FLYDSL_PERF_DIST": "1"}
     env_prefix = f"HIP_VISIBLE_DEVICES={gpu_id} FLYDSL_PERF_DIST=1 "
     flydsl_command_str = env_prefix + " ".join(flydsl_cmd)
-    command = flydsl_command_str + " ; " + f"HIP_VISIBLE_DEVICES={gpu_id} " + " ".join(aiter_cmd)
+    # Only name commands that actually run for this row (truthful provenance).
+    command = flydsl_command_str
+    if measure_e2e:
+        command += " ; " + f"HIP_VISIBLE_DEVICES={gpu_id} " + " ".join(aiter_cmd)
 
     s1_samples, s2_samples, sort_samples, combined_samples = [], [], [], []
     s1_p95s, s2_p95s = [], []
@@ -968,6 +977,11 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
     ap.add_argument("--out", default="", help="output CSV path")
     ap.add_argument("--csv", default="", help="CSV to validate (validate mode)")
     ap.add_argument("--no-e2e", action="store_true", help="skip the aiter e2e/correctness run")
+    ap.add_argument(
+        "--no-aot-check",
+        action="store_true",
+        help="run e2e strict+correct but do not require a pre-populated AOT cache (records aot_status=no_aot)",
+    )
     ap.add_argument("--assume-idle", action="store_true", help="skip the live idle-GPU probe")
     ap.add_argument(
         "--allow-unpinned",
@@ -1026,13 +1040,29 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
             print(f"ERROR: candidate run rejected: {e}", file=sys.stderr)
             return 2
         rows = [
-            run_point(rp, tiles[i], args.gpu, prov, measure_e2e=not args.no_e2e, reps=args.reps)
+            run_point(
+                rp,
+                tiles[i],
+                args.gpu,
+                prov,
+                measure_e2e=not args.no_e2e,
+                reps=args.reps,
+                check_aot=not args.no_aot_check,
+            )
             for i, rp in enumerate(run_list)
         ]
     else:  # baseline: full grid, default tiles
         run_list = build_run_list()
         rows = [
-            run_point(rp, default_tile_for(rp), args.gpu, prov, measure_e2e=not args.no_e2e, reps=args.reps)
+            run_point(
+                rp,
+                default_tile_for(rp),
+                args.gpu,
+                prov,
+                measure_e2e=not args.no_e2e,
+                reps=args.reps,
+                check_aot=not args.no_aot_check,
+            )
             for rp in run_list
         ]
 
