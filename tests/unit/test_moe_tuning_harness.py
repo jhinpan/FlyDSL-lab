@@ -1010,7 +1010,7 @@ def test_main_clock_provenance_fail_closed(monkeypatch, tmp_path):
 
 
 def test_regime_aware_abs_floor():
-    # DEC-9: 8us absolute floor for tokens<=64, 2us for tokens>=128.
+    # Regime-aware floor: 8us for tokens<=64, 2us for tokens>=128.
     assert spec.abs_floor_us(1) == 8.0
     assert spec.abs_floor_us(64) == 8.0
     assert spec.abs_floor_us(128) == 2.0
@@ -1083,3 +1083,28 @@ def test_repeatability_check_regime_aware(tmp_path):
     kp = res["unstable"]["kernel_path_us"]
     assert any(u[0] == ("kimi_k2", "a4w4", "silu", "128") for u in kp)  # 128 unstable
     assert all(u[0] != ("kimi_k2", "a4w4", "silu", "16") for u in kp)  # 16 stable under 8us
+
+
+def test_select_run_points_filters():
+    # Candidate selection filters the full grid by model/dtype/token.
+    pts = harness.select_run_points(model="deepseek_v3", dtype="a4w4", tokens=[16, 16384])
+    keys = {(p.model, p.dtype, p.token) for p in pts}
+    assert keys == {("deepseek_v3", "a4w4", 16), ("deepseek_v3", "a4w4", 16384)}
+    # dtype filter excludes a8w4.
+    assert all(p.dtype == "a4w4" for p in harness.select_run_points(model="kimi_k2", dtype="a4w4"))
+    # whole-grid when unfiltered equals build_run_list.
+    assert len(harness.select_run_points()) == len(harness.build_run_list())
+
+
+def test_candidate_tile_for_overrides_and_legality():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 16)
+    # Legal override: stage1 tile_n -> 128 (the DS V3 lead).
+    t = harness.candidate_tile_for(rp, {"tile_n1": 128})
+    assert t["tile_n1"] == 128 and t["tile_m1"] == 64 and t["tile_k1"] == 256
+    # No overrides -> the shape's default tiles.
+    assert harness.candidate_tile_for(rp, {}) == harness.default_tile_for(rp)
+    # Illegal override is rejected before any compile (e.g. fp4 tile_m < 32).
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        harness.candidate_tile_for(rp, {"tile_m1": 16})

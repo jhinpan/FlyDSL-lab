@@ -448,6 +448,64 @@ def expected_point_keys() -> set:
     return {(p.model, p.dtype, p.act, str(p.token)) for p in build_run_list()}
 
 
+def select_run_points(model=None, dtype=None, tokens=None) -> List[RunPoint]:
+    """Filter the full run list by model / dtype / token set (for candidate sweeps).
+
+    ``model`` and ``dtype`` are exact-match strings (None = all); ``tokens`` is an
+    iterable of ints (None = the model's full grid).  Lets a reproducible candidate
+    sweep target e.g. one model+dtype over chosen tokens instead of the whole grid.
+    """
+    tok_set = set(int(t) for t in tokens) if tokens else None
+    out = []
+    for rp in build_run_list():
+        if model is not None and rp.model != model:
+            continue
+        if dtype is not None and rp.dtype != dtype:
+            continue
+        if tok_set is not None and rp.token not in tok_set:
+            continue
+        out.append(rp)
+    return out
+
+
+def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
+    """Tile config for a candidate sweep: the shape's default tiles with explicit
+    per-key overrides applied (only keys present in ``overrides`` are changed).
+
+    Raises ValueError if the resulting (stage1, stage2) tiles are illegal for the
+    shape under the pre-compile legality filter, so a candidate sweep never spends
+    GPU time on a config the kernel would reject.
+    """
+    from kernels import moe_tuning as _mt
+
+    tile = dict(default_tile_for(rp))
+    for k in ("tile_m1", "tile_n1", "tile_k1", "tile_n2", "tile_k2"):
+        if overrides.get(k) is not None:
+            tile[k] = int(overrides[k])
+    a_dtype = spec.DTYPE_ALIAS_TO_A_DTYPE[rp.dtype]
+    r1 = _mt.check_tile_config(
+        stage=1,
+        model_dim=rp.model_dim,
+        inter_dim=rp.inter_dim,
+        tile_m=tile["tile_m1"],
+        tile_n=tile["tile_n1"],
+        tile_k=tile["tile_k1"],
+        a_dtype=a_dtype,
+    )
+    r2 = _mt.check_tile_config(
+        stage=2,
+        model_dim=rp.model_dim,
+        inter_dim=rp.inter_dim,
+        tile_m=tile["tile_m1"],
+        tile_n=tile["tile_n2"],
+        tile_k=tile["tile_k2"],
+        a_dtype=a_dtype,
+    )
+    if not (r1.legal and r2.legal):
+        raise ValueError(f"illegal candidate tiles for {rp.model}/{rp.dtype}: s1={r1.reason} s2={r2.reason}")
+    return tile
+
+
 # --- baseline validation gate (the baseline contract negative tests) ------------------------
 
 # The locked baseline must come from this exact commit (DEC scope).
@@ -854,6 +912,13 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         action="store_true",
         help="proceed (recording clocks_pinned=False) even if clock pinning cannot be verified",
     )
+    # Candidate-mode selection + explicit tile overrides (reproducible sweeps).
+    ap.add_argument("--model", default=None, help="restrict to one model (candidate mode)")
+    ap.add_argument("--dtype", default=None, help="restrict to one dtype alias, e.g. a4w4 (candidate mode)")
+    ap.add_argument("--tokens", default=None, help="comma/space-separated token list (candidate mode)")
+    ap.add_argument("--reps", type=int, default=3, help="independent subprocess reps per point")
+    for _k in ("tile-m1", "tile-n1", "tile-k1", "tile-n2", "tile-k2"):
+        ap.add_argument(f"--{_k}", type=int, default=None, help=f"candidate {_k.replace('-', '_')} override")
     args = ap.parse_args(argv)
 
     if args.mode == "list":
@@ -879,9 +944,41 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         )
         return 2
 
+    overrides = {
+        "tile_m1": args.tile_m1,
+        "tile_n1": args.tile_n1,
+        "tile_k1": args.tile_k1,
+        "tile_n2": args.tile_n2,
+        "tile_k2": args.tile_k2,
+    }
+    has_overrides = any(v is not None for v in overrides.values())
+
+    if args.mode == "candidate":
+        toks = None
+        if args.tokens:
+            toks = [int(t) for t in args.tokens.replace(",", " ").split()]
+        run_list = select_run_points(model=args.model, dtype=args.dtype, tokens=toks)
+        if not run_list:
+            print("ERROR: candidate selection matched no points", file=sys.stderr)
+            return 2
+
+        def tile_fn(rp):
+            return candidate_tile_for(rp, overrides) if has_overrides else default_tile_for(rp)
+
+    else:  # baseline: full grid, default tiles
+        run_list = build_run_list()
+
+        def tile_fn(rp):
+            return default_tile_for(rp)
+
     rows = []
-    for rp in build_run_list():
-        rows.append(run_point(rp, default_tile_for(rp), args.gpu, prov, measure_e2e=not args.no_e2e))
+    for rp in run_list:
+        try:
+            tile = tile_fn(rp)
+        except ValueError as e:
+            print(f"  SKIP {rp.model}/{rp.dtype} t={rp.token}: {e}", flush=True)
+            continue
+        rows.append(run_point(rp, tile, args.gpu, prov, measure_e2e=not args.no_e2e, reps=args.reps))
     out = args.out or f"/tmp/moe_{args.mode}.csv"
     write_csv(rows, out)
     print(f"wrote {len(rows)} rows -> {out}")
@@ -910,6 +1007,9 @@ __all__ = [
     "setup_run_provenance",
     "build_run_list",
     "expected_point_keys",
+    "select_run_points",
+    "candidate_tile_for",
+    "default_tile_for",
     "validate_baseline_row",
     "validate_baseline_csv",
     "run_point",

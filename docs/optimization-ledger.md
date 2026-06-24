@@ -65,9 +65,11 @@ file is the human-facing running log.
   small-token gate (≥10% AND ≥ the 8µs small-token band). **Zero Pareto
   regression** across the full DS V3 a4w4 token sweep (`is_regression` token-aware,
   0 regressing points). Mid tokens 256–1024 also ~11–13% faster (bonus).
-- Large-MFU target buckets improved but **below** the AC-3 10% margin:
-  16384 = −9.2%, 32768 = −5.5% — so this is an AC-4 (small-token) candidate, not
-  yet an AC-3 (large-shape) win.
+- Large-MFU target buckets (MFU improvement = kernel-path latency reduction at
+  fixed shape): 16384 latency −9.2% → **MFU +10.1%** (clears the AC-3 10% margin
+  at this single bucket), 32768 latency −5.5% → **MFU +5.8%** (below). AC-3
+  requires BOTH target buckets (16384 AND 32768), so DS V3 does NOT yet satisfy
+  AC-3 — this remains an AC-4 (small-token) candidate.
 - Correctness: FlyDSL-side reference clean (`--skip_ref false`, atomic+reduce
   stage2). The strict aiter e2e correctness gate (`logits_diff <= 0.01`) and a
   clean re-run for stability remain to be run before this is a *confirmed* win.
@@ -106,11 +108,12 @@ file is the human-facing running log.
     across the low/mid token range, not just a tiny-token floor effect. In-protocol
     levers are EXHAUSTED (L2-flush rotation + reps=3 + verified clock pinning).
     Floor sensitivity: 2us->9/7, 3us->8/5, 5us->3/3, 6us->1/2, 10us->0/1, 20us->0/0.
-    **OPEN USER PROTOCOL DECISION (a tokens<=64-only band is INSUFFICIENT):**
-    (a) a wider absolute band covering the affected regime; (b) more reps / a
-    dedicated non-shared node; or (c) kernel-path-primary no-regression with a
-    regime-aware band and e2e as a guardrail-only signal. Locked DEC-2 stays
-    `max(2%, 2us)` until the user decides. Not self-approved.
+    **RESOLVED by the user (DEC-9):** the no-regression/repeatability absolute band
+    is now regime-aware — `max(2%, 8us)` for tokens<=64, `max(2%, 2us)` for
+    tokens>=128. Under DEC-9 the residual reduces to kimi_k2/128 kernel-path
+    (6.8us, mid-token watch — to re-measure under pinned clocks) and kimi_k2/64
+    e2e (~16us, documented guardrail outlier; e2e is a guardrail not the tuning
+    target).
   - `docs/baseline_523ca1c7.csv` — honest full 96-point record (40 a4w4 pass + 56
     a8w4 via the strict path, `correctness_pass=False`). Default
     `validate_baseline_csv` fails ONLY on the a8w4 correctness rows, 0 missing.
@@ -127,10 +130,13 @@ file is the human-facing running log.
   pre-scattered A2 E8M0 scale). It is **NOT a FlyDSL kernel math bug** — this
   checkout's own `tests/kernels/test_moe_gemm.py --in_dtype a8w4` passes with
   `--skip_ref false`. Fixing it is aiter-environment work outside the GEMM-tuning
-  scope. All a8w4 are quarantined (`moe_tuning_spec.QUARANTINED_SHAPES`); the a8w4
-  scope question is OPEN for the user (a4w4-only tuning vs authorize aiter-wrapper
-  work). No a8w4 win may be claimed until a8w4 e2e correctness is green.
-- Status: the **a4w4 baseline is validated** (exit 0 over a4w4 keys). The default
-  full-96 baseline remains a8w4-correctness-blocked, with fully auditable per-row
-  a8w4 failure evidence. Tile-sweep tuning is NOT started; it awaits the user a8w4
-  scope decision.
+  scope. All a8w4 are quarantined (`moe_tuning_spec.QUARANTINED_SHAPES`).
+  **RESOLVED by the user (DEC-10):** this campaign tunes the a4w4 set; a8w4 (and
+  DeepSeek V4, which is a8w4-only) are DEFERRED-with-reason, NOT abandoned. The
+  out-of-scope aiter-wrapper fix is a stretch (DEC-10b) only if rounds remain
+  after the a4w4 Pareto goal. No a8w4 win may be claimed until a8w4 e2e
+  correctness is green.
+- Status: the **a4w4 baseline is validated** (exit 0 over a4w4 keys) and a4w4
+  tile-sweep tuning is UNDERWAY (DS V3 done; Kimi K2 / GPT-OSS next). The default
+  full-96 baseline remains a8w4-correctness-blocked (DEC-10 deferred), with fully
+  auditable per-row a8w4 failure evidence.
