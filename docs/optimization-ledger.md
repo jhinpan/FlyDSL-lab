@@ -78,18 +78,20 @@ file is the human-facing running log.
     faithful L2-flush rotated protocol at reps=3 with clocks HARNESS-VERIFIED
     pinned (`setup_run_provenance` calls `pin_clocks` + `clocks_pinned_state`;
     `clocks_pinned=True` is now trustworthy, not a static default). Under the
-    locked `max(2%, 2us)` band, residual instability stays confined to SMALL
-    TOKENS (1-32): kernel-path 9/40, e2e 7/40 (the exact count varies run-to-run
-    — small-token jitter is stochastic — but is always nonzero and always
-    small-token). Absolute kernel-path us there is 127-183us, so the 2us floor is
-    ~1.1-1.6% — below the ~3-5us launch/host jitter. In-protocol levers are
-    EXHAUSTED (faithful L2-flush rotation, reps=3, AND harness-verified clock
-    pinning). Floor sensitivity (this pair): 2us->9/7 unstable, 3us->8/5, 5us->3/3,
-    6us->1/2. **OPEN USER PROTOCOL DECISION:** widen the small-token (tokens<=64)
-    repeatability/no-regression absolute band (a ~6us+ floor substantially reduces
-    instability and stays far below the DEC-1 small-token win threshold of >=2us
-    absolute AND >=10%), or keep 2us and accept tiny-token points are
-    non-comparable on this node. Not self-approved.
+    locked `max(2%, 2us)` band: kernel-path 9/40 unstable, e2e 7/40 unstable.
+    CORRECTION (retracts an earlier "small-token-only" claim): the instability is
+    NOT confined to tokens<=32 — kernel-path unstable tokens are {1,2,4,8,16,32,128}
+    (incl. kimi_k2 token 128, 292.4->299.2us = 6.8us) and e2e unstable tokens are
+    {1,2,4,32,64} (incl. a large kimi_k2 token-64 outlier 168.4->184.7us = 16.4us).
+    With clocks harness-verified pinned, this is genuine run-to-run node variance
+    across the low/mid token range, not just a tiny-token floor effect. In-protocol
+    levers are EXHAUSTED (L2-flush rotation + reps=3 + verified clock pinning).
+    Floor sensitivity: 2us->9/7, 3us->8/5, 5us->3/3, 6us->1/2, 10us->0/1, 20us->0/0.
+    **OPEN USER PROTOCOL DECISION (a tokens<=64-only band is INSUFFICIENT):**
+    (a) a wider absolute band covering the affected regime; (b) more reps / a
+    dedicated non-shared node; or (c) kernel-path-primary no-regression with a
+    regime-aware band and e2e as a guardrail-only signal. Locked DEC-2 stays
+    `max(2%, 2us)` until the user decides. Not self-approved.
   - `docs/baseline_523ca1c7.csv` — honest full 96-point record (40 a4w4 pass + 56
     a8w4 via the strict path, `correctness_pass=False`). Default
     `validate_baseline_csv` fails ONLY on the a8w4 correctness rows, 0 missing.

@@ -950,3 +950,60 @@ def test_setup_run_provenance_reflects_verified_clock_state(monkeypatch):
         "clocks_pinned": str(prov2.clocks_pinned),
     }
     assert "clocks_must_be_pinned" in harness.validate_baseline_row(row)
+
+
+def test_main_clock_provenance_fail_closed(monkeypatch, tmp_path):
+    # Direct regression around the live _main() path: it must pin+verify clocks,
+    # write rows with the verified clocks_pinned, fail-closed (rc=2, no CSV) when
+    # pinning cannot be verified, and proceed under --allow-unpinned.
+    rp = harness.RunPoint("kimi_k2", 7168, 256, 384, 8, "silu", "a4w4", 16)
+    monkeypatch.setattr(harness, "build_run_list", lambda: [rp])
+    monkeypatch.setattr(harness, "check_idle_gpu", lambda g, **k: True)
+    monkeypatch.setattr(harness, "git_provenance", lambda *a, **k: {"branch": "b", "commit": "523ca1c7"})
+    monkeypatch.setattr(harness, "gpu_provenance", lambda g: {"gpu_id": str(g), "gpu_model": "MI350X"})
+
+    written = {}
+
+    def fake_write_csv(rows, path):
+        written["rows"] = rows
+        written["path"] = path
+
+    def fake_run_point(rp_, tile, gpu, prov, **k):
+        return harness.PointRow(
+            provenance=prov,
+            command="cmd",
+            model=rp_.model,
+            model_dim=rp_.model_dim,
+            inter_dim=rp_.inter_dim,
+            experts=rp_.experts,
+            topk=rp_.topk,
+            dtype=rp_.dtype,
+            act=rp_.act,
+            token=rp_.token,
+        )
+
+    monkeypatch.setattr(harness, "write_csv", fake_write_csv)
+    monkeypatch.setattr(harness, "run_point", fake_run_point)
+    monkeypatch.setattr(harness, "pin_clocks", lambda g, *a, **k: True)
+
+    out = str(tmp_path / "b.csv")
+
+    # (a) verified pinned -> rc 0, rows written with clocks_pinned True.
+    written.clear()
+    monkeypatch.setattr(harness, "clocks_pinned_state", lambda g: True)
+    rc = harness._main(["baseline", "--gpu", "0", "--assume-idle", "--no-e2e", "--out", out])
+    assert rc == 0
+    assert written["rows"][0].provenance.clocks_pinned is True
+
+    # (b) verification fails -> fail-closed: rc 2 and NO csv written.
+    written.clear()
+    monkeypatch.setattr(harness, "clocks_pinned_state", lambda g: False)
+    rc = harness._main(["baseline", "--gpu", "0", "--assume-idle", "--no-e2e", "--out", out])
+    assert rc == 2
+    assert "rows" not in written  # fail-closed: did not write a false-pinned CSV
+
+    # (c) --allow-unpinned proceeds, recording clocks_pinned False.
+    written.clear()
+    rc = harness._main(["baseline", "--gpu", "0", "--assume-idle", "--no-e2e", "--allow-unpinned", "--out", out])
+    assert rc == 0
+    assert written["rows"][0].provenance.clocks_pinned is False
