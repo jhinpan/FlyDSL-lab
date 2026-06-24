@@ -114,6 +114,128 @@ def test_parse_flydsl_stage_us_missing():
     assert got["stage1_us"] is None and got["stage2_us"] is None
 
 
+def test_parse_aiter_output_pass():
+    out = (
+        "calling test_fmoe(...)\n"
+        "ck_moe_2stages:  234.56 us,   654.00 tflops......(quant:fp4x2)[checkAllclose passed~]\n"
+        "logits_diff: 0.0008\n"
+    )
+    res = harness.parse_aiter_output(out)
+    assert res["e2e_us"] == 234.56
+    assert res["logits_diff"] == 0.0008
+    assert res["correctness_pass"] is True
+
+
+def test_parse_aiter_output_fail_on_logits_and_assertion():
+    # logits over 0.01 -> correctness fail even with an e2e number.
+    out_logits = "ck_moe_2stages:  100.00 us, 100.00 tflops\nlogits_diff: 0.05\n"
+    assert harness.parse_aiter_output(out_logits)["correctness_pass"] is False
+    # strict accuracy assertion text -> fail.
+    out_assert = "ck_moe_2stages:  100.00 us\naccuracy check failed: checkAllclose err=1, logits_diff=0.2\n"
+    assert harness.parse_aiter_output(out_assert)["correctness_pass"] is False
+    # no e2e number at all -> fail.
+    assert harness.parse_aiter_output("nothing")["correctness_pass"] is False
+
+
+# --- run-list coverage (full DEC-6 grid from spec) -------------------------
+
+
+def test_run_list_covers_full_dec6_grid():
+    rl = harness.build_run_list()
+    # DS V3 (16 tok x 2 dtype) + DS V4 (16 x 1) + Kimi (16 x 2) + GPT-OSS (8 x 2)
+    assert len(rl) == 16 * 2 + 16 * 1 + 16 * 2 + 8 * 2 == 96
+    keys = harness.expected_point_keys()
+    # DeepSeek V4 is a8w4-only.
+    assert ("deepseek_v4", "a8w4", "silu", "1") in keys
+    assert ("deepseek_v4", "a4w4", "silu", "1") not in keys
+    # GPT-OSS has no tiny-token regime; starts at 256.
+    assert ("gpt_oss", "a4w4", "swiglu", "256") in keys
+    assert ("gpt_oss", "a4w4", "swiglu", "1") not in keys
+    # full small + large coverage for a skinny model.
+    for tok in (1, 16, 64, 4096, 16384, 32768):
+        assert ("kimi_k2", "a4w4", "silu", str(tok)) in keys
+
+
+# --- baseline validation gate (AC-1 negative tests) ------------------------
+
+
+def _good_baseline_row(**over):
+    row = {
+        "gpu_id": "0",
+        "gpu_model": "MI350X",
+        "branch": "rlcr/mxfp4-moe",
+        "commit": "523ca1c7deadbeef",
+        "command": "python3 test_moe_gemm.py ... ; python3 test_moe_2stage.py ...",
+        "warmup": "10",
+        "iters": "100",
+        "idle_gpu_verified": "True",
+        "graph_capture": "False",
+        "l2_flush_per_iter": "True",
+        "clocks_pinned": "True",
+        "model": "kimi_k2",
+        "dtype": "a4w4",
+        "act": "silu",
+        "token": "16",
+        "e2e_us": "150.0",
+        "logits_diff": "0.0008",
+    }
+    row.update(over)
+    return row
+
+
+def test_validate_baseline_row_accepts_good_row():
+    assert harness.validate_baseline_row(_good_baseline_row()) == []
+
+
+@pytest.mark.parametrize(
+    "over,expect",
+    [
+        ({"commit": "abc123"}, "commit_not_523ca1c7"),
+        ({"commit": ""}, "missing_commit"),
+        ({"idle_gpu_verified": "False"}, "idle_gpu_not_verified"),
+        ({"command": ""}, "missing_command"),
+        ({"dtype": ""}, "missing_dtype"),
+        ({"act": ""}, "missing_act"),
+        ({"e2e_us": ""}, "missing_e2e_us"),
+        ({"logits_diff": ""}, "missing_logits_diff"),
+        ({"warmup": "2"}, "warmup_mismatch"),
+        ({"iters": "5"}, "iters_mismatch"),
+        ({"graph_capture": "True"}, "graph_capture_must_be_off"),
+        ({"l2_flush_per_iter": "False"}, "l2_flush_must_be_on"),
+        ({"clocks_pinned": "False"}, "clocks_must_be_pinned"),
+    ],
+)
+def test_validate_baseline_row_rejections(over, expect):
+    reasons = harness.validate_baseline_row(_good_baseline_row(**over))
+    assert expect in reasons
+
+
+def test_validate_baseline_csv_missing_coverage(tmp_path):
+    # A single valid row is not enough; the full workload must be covered.
+    out = tmp_path / "baseline.csv"
+    p = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="523ca1c7", idle_gpu_verified=True)
+    row = harness.PointRow(
+        provenance=p,
+        command="cmd",
+        model="kimi_k2",
+        model_dim=7168,
+        inter_dim=256,
+        experts=384,
+        topk=8,
+        dtype="a4w4",
+        act="silu",
+        token=16,
+        e2e_us=150.0,
+        logits_diff=0.0008,
+        kernel_path_us=100.0,
+    )
+    harness.write_csv([row], str(out))
+    res = harness.validate_baseline_csv(str(out))
+    assert res["valid"] is False
+    assert res["missing_points"]  # almost all points missing
+    assert res["row_errors"] == {}  # the one present row is itself valid
+
+
 def test_combined_and_metrics():
     combined = harness.combined_kernel_path_us(1000.0, 800.0, 50.0)
     assert combined == 1850.0
@@ -301,6 +423,126 @@ def test_compare_csvs_detects_regression_and_wins(tmp_path):
     )
     cv = ledger.compare_csvs(base, cand)
     assert cv.any_regression is True  # the 128-token point regressed
+    assert cv.coverage_complete  # candidate covers all 3 baseline points
     assert not cv.pareto_clean
     assert ("kimi_k2", "a4w4", "silu", "16384") in cv.large_wins
     assert ("kimi_k2", "a4w4", "silu", "16") in cv.small_wins
+
+
+def test_compare_csvs_rejects_cherry_picked_candidate(tmp_path):
+    # Baseline has 3 points; candidate reports only the single winning large
+    # point and omits the others.  Coverage must be incomplete and the verdict
+    # must NOT be pareto_clean -- a cherry-picked win cannot pass.
+    base = str(tmp_path / "base.csv")
+    cand = str(tmp_path / "cand.csv")
+    _csv(
+        base,
+        [
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16384,
+                "kernel_path_us": 1000,
+                "e2e_us": 1200,
+                "mfu": 0.50,
+            },
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16,
+                "kernel_path_us": 100,
+                "e2e_us": 150,
+                "mfu": 0.05,
+            },
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 128,
+                "kernel_path_us": 500,
+                "e2e_us": 600,
+                "mfu": 0.30,
+            },
+        ],
+    )
+    _csv(
+        cand,
+        [
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16384,
+                "kernel_path_us": 900,
+                "e2e_us": 1100,
+                "mfu": 0.56,
+            },
+        ],
+    )
+    cv = ledger.compare_csvs(base, cand)
+    assert not cv.coverage_complete
+    assert ("kimi_k2", "a4w4", "silu", "16") in cv.missing_candidate_points
+    assert ("kimi_k2", "a4w4", "silu", "128") in cv.missing_candidate_points
+    assert not cv.pareto_clean  # forced False by incomplete coverage
+
+
+def test_compare_csvs_rejects_missing_regime_fields(tmp_path):
+    # Candidate covers every point but the large target bucket lacks mfu, and a
+    # point lacks e2e.  Those points are incomplete -> not pareto_clean.
+    base = str(tmp_path / "base.csv")
+    cand = str(tmp_path / "cand.csv")
+    _csv(
+        base,
+        [
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16384,
+                "kernel_path_us": 1000,
+                "e2e_us": 1200,
+                "mfu": 0.50,
+            },
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 128,
+                "kernel_path_us": 500,
+                "e2e_us": 600,
+                "mfu": 0.30,
+            },
+        ],
+    )
+    _csv(
+        cand,
+        [
+            # large bucket missing mfu
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 16384,
+                "kernel_path_us": 900,
+                "e2e_us": 1100,
+                "mfu": "",
+            },
+            # mid point missing e2e
+            {
+                "model": "kimi_k2",
+                "dtype": "a4w4",
+                "act": "silu",
+                "token": 128,
+                "kernel_path_us": 480,
+                "e2e_us": "",
+                "mfu": 0.30,
+            },
+        ],
+    )
+    cv = ledger.compare_csvs(base, cand)
+    assert not cv.coverage_complete
+    assert ("kimi_k2", "a4w4", "silu", "16384") in cv.incomplete_points
+    assert ("kimi_k2", "a4w4", "silu", "128") in cv.incomplete_points
+    assert not cv.pareto_clean

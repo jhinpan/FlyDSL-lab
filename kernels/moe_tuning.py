@@ -102,11 +102,13 @@ def stage1_lds_bytes(
     overflow the arch limit, plus the waves_per_eu minimum-LDS padding.
     """
     a_elem_bytes = _a_elem_bytes(a_dtype)
-    vec_pack = _A_ELEM_VEC_PACK.get(a_dtype, 1)
     # FLIR_CK_LDS128 defaults on -> pad_k = 0.
     lds_stride = tile_k
-    # fp4 activation halves the effective stride via a_elem_vec_pack.
-    eff_lds_stride = lds_stride // vec_pack if vec_pack > 1 else lds_stride
+    # NOTE: stage1 sizes the LDS A tile from the FULL lds_stride; unlike stage2 it
+    # does NOT divide by a_elem_vec_pack for fp4 here.  The fp4 vec-pack stride
+    # halving only applies, conditionally, to an inner async-copy buffer in the
+    # kernel body, not to this top-level ping/pong allocation.  See
+    # compile_mixed_moe_gemm1: ``_single_x_bytes = tile_m * lds_stride * a_elem_bytes``.
 
     out_s = str(out_dtype).strip().lower()
     out_is_f32 = out_s in ("f32", "fp32", "float")
@@ -114,7 +116,7 @@ def stage1_lds_bytes(
     if need_quant:
         use_cshuffle_epilog = True
 
-    single_x_bytes = tile_m * eff_lds_stride * a_elem_bytes
+    single_x_bytes = tile_m * lds_stride * a_elem_bytes
     cshuffle_elem_bytes = 4 if need_quant else (4 if out_is_f32 else 2)
     lds_out_bytes = cshuffle_elem_bytes * tile_m * tile_n if use_cshuffle_epilog else 0
     lds_tid_bytes = tile_m * 4

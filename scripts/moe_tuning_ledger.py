@@ -156,33 +156,71 @@ def compare_point(baseline: dict, candidate: dict) -> PointVerdict:
     return v
 
 
+def _required_fields_for_point(token: int) -> Tuple[str, ...]:
+    """Comparison fields a candidate row must carry for its token regime.
+
+    Every point needs both latency metrics; large target buckets additionally
+    need ``mfu`` (the large-shape win/regression axis).
+    """
+    fields = ["kernel_path_us", "e2e_us"]
+    if spec.is_large_token(token) and token in spec.MFU_TARGET_BUCKETS:
+        fields.append("mfu")
+    return tuple(fields)
+
+
+def _row_missing_fields(row: dict, fields: Tuple[str, ...]) -> List[str]:
+    return [f for f in fields if _f(row, f) is None]
+
+
 @dataclass
 class CampaignVerdict:
     points: List[PointVerdict] = field(default_factory=list)
     any_regression: bool = False
     large_wins: List[Tuple] = field(default_factory=list)
     small_wins: List[Tuple] = field(default_factory=list)
+    missing_candidate_points: List[Tuple] = field(default_factory=list)
+    incomplete_points: List[Tuple] = field(default_factory=list)
+
+    @property
+    def coverage_complete(self) -> bool:
+        """True only if every baseline point has a candidate row with all the
+        regime-required comparison fields present (no cherry-picking)."""
+        return not self.missing_candidate_points and not self.incomplete_points
 
     @property
     def pareto_clean(self) -> bool:
-        """True if no point regressed on kernel-path or e2e (no Pareto regression)."""
-        return not self.any_regression
+        """True only if coverage is complete AND no point regressed on kernel-path
+        or e2e.  Incomplete/cherry-picked candidate CSVs can never be clean."""
+        return self.coverage_complete and not self.any_regression
 
 
 def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     """Full per-point Pareto comparison of a candidate vs the locked baseline.
 
-    A win is only claimable when ``pareto_clean`` holds (DEC-2) AND at least one
-    target-bucket / small-token win is present (DEC-1).  Re-run-stability is
-    enforced separately by re-running and re-comparing.
+    Iterates the COMPLETE baseline key set so a candidate cannot pass by omitting
+    a regressing/uncovered point.  A point with a missing candidate row, or whose
+    candidate row lacks a regime-required field (kernel_path_us/e2e_us for every
+    point; mfu for large target buckets), makes ``coverage_complete`` False, which
+    forces ``pareto_clean`` False.
+
+    A win is only claimable when ``pareto_clean`` holds (DEC-2 + full coverage)
+    AND at least one target-bucket / small-token win is present (DEC-1).
+    Re-run-stability is enforced separately by re-running and re-comparing.
     """
     base = read_point_csv(baseline_csv)
     cand = read_point_csv(candidate_csv)
     cv = CampaignVerdict()
-    for key, c_row in cand.items():
-        b_row = base.get(key)
-        if b_row is None:
-            cv.points.append(PointVerdict(key=key, token=int(float(c_row.get("token") or 0)), note="no_baseline_point"))
+    for key, b_row in base.items():
+        token = int(float(b_row.get("token") or 0))
+        c_row = cand.get(key)
+        if c_row is None:
+            cv.missing_candidate_points.append(key)
+            cv.points.append(PointVerdict(key=key, token=token, note="missing_candidate_point"))
+            continue
+        missing = _row_missing_fields(c_row, _required_fields_for_point(token))
+        if missing:
+            cv.incomplete_points.append(key)
+            cv.points.append(PointVerdict(key=key, token=token, note="missing_fields:" + ",".join(missing)))
             continue
         pv = compare_point(b_row, c_row)
         cv.points.append(pv)

@@ -7,8 +7,12 @@ file is the human-facing running log.
 
 ## Reference
 
-- Locked baseline: `upstream/main` @ `523ca1c7`, measured on a fixed idle
-  MI350X (gfx950), ROCm 7.2, AITER installed.
+- Locked baseline ref: `upstream/main` @ `523ca1c7`, built in an isolated
+  worktree and measured on a fixed idle MI350X (gfx950). Kernel-path metrics are
+  recorded in `docs/baseline_523ca1c7_kernelpath.csv`. The full fused-MoE e2e
+  guardrail column is pending an aiter harness env fix (see goal-tracker blocking
+  issue); a win cannot be claimed until the e2e + strict-correctness columns are
+  present and validated.
 - fp4 peak (MFU denominator): **4523 TFLOPS** (empirical ceiling on this node).
 - Metric formula: `effective_tflops = token*model_dim*inter_dim*3*topk*2 / combined_us / 1e6`;
   `mfu = effective_tflops / 4523`. Combined kernel-path us = stage1 + stage2 + sorting.
@@ -42,4 +46,21 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
-_No attempts recorded yet. The locked baseline measurement is the first entry._
+### Baseline — locked ref `523ca1c7` kernel-path (Round 1)
+
+- Result: `baseline` (reference table; not a tuning attempt).
+- Config: baseline default tiles per shape from `scripts/run_benchmark.sh`
+  (stage1 64/256/256, or 32/128/256 for GPT-OSS; stage2 tile_n2/tile_k2 = 256/256).
+- Scope: all 4 models × in-scope dtypes × full DEC-6 token grid = **96 points**.
+- GPU: AMD Instinct MI350X (gfx950), `idle_gpu_verified=True`.
+- Commit: `523ca1c7e224…` (isolated worktree build `flydsl-baseline-523ca1c7`).
+- Protocol: warmup=10, iters=100, graph-capture OFF, L2 flush per iter, clocks pinned.
+- CSV: `docs/baseline_523ca1c7_kernelpath.csv` (kernel-path us, effective TFLOPS,
+  MFU present for every point).
+- Status: kernel-path metrics complete and validated (`validate_baseline_csv`
+  reports 0 missing points, all rows from the locked commit/idle/protocol). The
+  full fused-MoE **e2e guardrail** and strict-correctness columns are still empty
+  — the aiter `op_tests/test_moe_2stage.py` run fails under the current env with
+  `AttributeError: 'Int32' object has no attribute 'type'` (flydsl/aiter version
+  mismatch). No tuning win may be claimed until those columns are filled and
+  validated.

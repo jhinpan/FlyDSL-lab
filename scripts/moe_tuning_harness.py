@@ -28,13 +28,14 @@ fixed idle gfx950 node.
 from __future__ import annotations
 
 import csv
+import json
 import os
 import re
 import statistics
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -95,6 +96,19 @@ METRIC_FORMULA = (
 #   "FlyDSL MoE stage2 [moe_gemm2] fp4 atomic | 7168x2048, ... | 1163.2 us, 1654.24 TFLOPS, 0.377 TB/s"
 _STAGE1_RE = re.compile(r"FlyDSL MoE stage1\[[^\]]+\]:\s*([0-9.]+)\s*us")
 _STAGE2_RE = re.compile(r"FlyDSL MoE stage2 \[[^\]]+\]\s+\S+\s+(atomic|reduce)\b.*?([0-9.]+)\s*us")
+# Optional sorting print, if the FlyDSL benchmark emits one.
+_SORT_RE = re.compile(r"FlyDSL MoE sort(?:ing)?[^\d]*([0-9.]+)\s*us", re.IGNORECASE)
+
+# aiter op_tests/test_moe_2stage.py full fused_moe e2e print (line 363):
+#   "ck_moe_2stages:  123.45 us,  654.00 tflops......(quant:...)"
+_AITER_E2E_RE = re.compile(r"ck_moe_2stages:\s*([0-9.]+)\s*us")
+# aiter logits_diff warning (line 374) and the strict accuracy assertion text.
+_AITER_LOGITS_RE = re.compile(r"logits_diff[:=]\s*([0-9.eE+-]+)")
+# A FAIL/ERROR row or the strict accuracy assertion indicates a correctness miss.
+_AITER_FAIL_RE = re.compile(r"accuracy check failed|checkAllclose.*failed|AssertionError|FAIL|ERROR", re.IGNORECASE)
+
+# aiter -q quant index -> dtype alias used here (see l_quant in the harness).
+DTYPE_ALIAS_TO_AITER_Q = {"a4w4": 4, "a8w4": 7}
 
 
 @dataclass
@@ -224,6 +238,32 @@ def parse_flydsl_stage_us(stdout: str) -> dict:
     }
 
 
+def parse_flydsl_sorting_us(stdout: str) -> Optional[float]:
+    """Extract sorting us from FlyDSL stdout if present, else None (sorting is 0)."""
+    m = _SORT_RE.findall(stdout)
+    return float(m[-1]) if m else None
+
+
+def parse_aiter_output(stdout: str) -> dict:
+    """Extract e2e us, logits_diff, and correctness pass/fail from aiter stdout.
+
+    The aiter ``op_tests/test_moe_2stage.py`` harness times the whole fused_moe
+    call (the e2e guardrail) and logs ``ck_moe_2stages: <us> us``; it logs
+    ``logits_diff`` and, under ``strict_accuracy``, asserts on a correctness miss.
+    ``correctness_pass`` is True only when an e2e number was produced and no
+    FAIL/ERROR/assertion text appears.
+    """
+    e2e = _AITER_E2E_RE.findall(stdout)
+    logits = _AITER_LOGITS_RE.findall(stdout)
+    failed = bool(_AITER_FAIL_RE.search(stdout))
+    e2e_us = float(e2e[-1]) if e2e else None
+    logits_diff = float(logits[-1]) if logits else None
+    correctness_pass = (e2e_us is not None) and (not failed)
+    if logits_diff is not None:
+        correctness_pass = correctness_pass and (logits_diff <= 0.01)
+    return {"e2e_us": e2e_us, "logits_diff": logits_diff, "correctness_pass": correctness_pass}
+
+
 def combined_kernel_path_us(stage1_us: float, stage2_us: float, sorting_us: float = 0.0) -> float:
     """Combined kernel-path latency = stage1 + stage2 + sorting (microseconds)."""
     return float(stage1_us) + float(stage2_us) + float(sorting_us)
@@ -284,16 +324,329 @@ def write_csv(rows: List[PointRow], path: str) -> None:
             writer.writerow(r.to_csv_dict())
 
 
+def read_csv(path: str) -> List[dict]:
+    """Read a per-point CSV back as a list of column dicts."""
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+# --- workload run list (full DEC-6 coverage from the spec) ------------------
+
+
+@dataclass(frozen=True)
+class RunPoint:
+    """One (model, dtype, act, token) point in the campaign workload."""
+
+    model: str
+    model_dim: int
+    inter_dim: int
+    experts: int
+    topk: int
+    act: str
+    dtype: str  # "a4w4" | "a8w4"
+    token: int
+
+
+def build_run_list() -> List[RunPoint]:
+    """Every model x in-scope dtype x DEC-6 token from ``moe_tuning_spec.MODELS``.
+
+    This is the authoritative campaign workload; the harness sweeps exactly these
+    points so coverage is the full DEC-6 grid (not a partial manual table).
+    """
+    points: List[RunPoint] = []
+    for m in spec.MODELS:
+        for dtype in m.dtypes:
+            for token in m.token_grid:
+                points.append(RunPoint(m.name, m.model_dim, m.inter_dim, m.experts, m.topk, m.act, dtype, token))
+    return points
+
+
+def expected_point_keys() -> set:
+    """The set of (model, dtype, act, token) keys the full workload must cover."""
+    return {(p.model, p.dtype, p.act, str(p.token)) for p in build_run_list()}
+
+
+# --- baseline validation gate (AC-1 negative tests) ------------------------
+
+# The locked baseline must come from this exact commit (DEC scope).
+LOCKED_BASELINE_COMMIT = "523ca1c7"
+# Fields every baseline row must carry beyond the provenance object.
+ROW_REQUIRED_FIELDS = ("command", "dtype", "act", "model", "token")
+
+
+def validate_baseline_row(row: dict) -> List[str]:
+    """Return reasons ``row`` is NOT an acceptable locked-baseline row (empty=OK).
+
+    Rejects rows that are not from the locked commit, not idle-GPU verified, miss
+    a required provenance/identity field, lack the e2e/correctness measurement, or
+    use a non-locked protocol (warmup/iters/graph/L2/clock).
+    """
+    reasons: List[str] = []
+
+    commit = str(row.get("commit", ""))
+    if not commit:
+        reasons.append("missing_commit")
+    elif not commit.startswith(LOCKED_BASELINE_COMMIT):
+        reasons.append(f"commit_not_{LOCKED_BASELINE_COMMIT}")
+
+    if str(row.get("idle_gpu_verified", "")).lower() not in ("true", "1"):
+        reasons.append("idle_gpu_not_verified")
+
+    for f in ("gpu_id", "gpu_model", "branch", *ROW_REQUIRED_FIELDS):
+        if str(row.get(f, "")).strip() in ("", "None"):
+            reasons.append(f"missing_{f}")
+
+    # e2e + correctness must be present for a usable baseline point.
+    if str(row.get("e2e_us", "")).strip() in ("", "None"):
+        reasons.append("missing_e2e_us")
+    if str(row.get("logits_diff", "")).strip() in ("", "None"):
+        reasons.append("missing_logits_diff")
+
+    # Locked protocol (DEC-2): warmup=10, iters=100, graph OFF, L2 flush on, clocks pinned.
+    if str(row.get("warmup", "")) != str(spec.WARMUP_ITERS):
+        reasons.append("warmup_mismatch")
+    if str(row.get("iters", "")) != str(spec.BENCH_ITERS):
+        reasons.append("iters_mismatch")
+    if str(row.get("graph_capture", "")).lower() not in ("false", "0"):
+        reasons.append("graph_capture_must_be_off")
+    if str(row.get("l2_flush_per_iter", "")).lower() not in ("true", "1"):
+        reasons.append("l2_flush_must_be_on")
+    if str(row.get("clocks_pinned", "")).lower() not in ("true", "1"):
+        reasons.append("clocks_must_be_pinned")
+    return reasons
+
+
+def validate_baseline_csv(path: str) -> dict:
+    """Validate every row of a baseline CSV and that coverage equals the workload.
+
+    Returns ``{"valid": bool, "row_errors": {key: [reasons]}, "missing_points":
+    [...], "n_rows": int}``.  A baseline is valid only if every row passes
+    :func:`validate_baseline_row` AND all expected workload points are present.
+    """
+    rows = read_csv(path)
+    row_errors: Dict[str, list] = {}
+    seen = set()
+    for row in rows:
+        key = (row.get("model"), row.get("dtype"), row.get("act"), row.get("token"))
+        seen.add(key)
+        errs = validate_baseline_row(row)
+        if errs:
+            row_errors[str(key)] = errs
+    missing = sorted(str(k) for k in (expected_point_keys() - seen))
+    valid = not row_errors and not missing
+    return {"valid": valid, "row_errors": row_errors, "missing_points": missing, "n_rows": len(rows)}
+
+
+# --- live measurement (runs on the gfx950 node) ----------------------------
+
+
+def check_idle_gpu(gpu_id: str, busy_pct_threshold: int = 5) -> bool:
+    """True if the GPU's utilization is below ``busy_pct_threshold`` (idle check)."""
+    out = _run(["rocm-smi", "-d", str(gpu_id), "--showuse"])
+    for line in out.splitlines():
+        m = re.search(r"GPU use \(%\)\s*:?\s*([0-9]+)", line)
+        if m:
+            return int(m.group(1)) < busy_pct_threshold
+    # If utilization could not be read, do not claim idle.
+    return False
+
+
+def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
+    """FlyDSL per-stage benchmark command for one point under the locked protocol."""
+    in_dtype = "fp4" if rp.dtype == "a4w4" else "a8w4"
+    return [
+        "python3",
+        os.path.join(_REPO_ROOT, "tests", "kernels", "test_moe_gemm.py"),
+        "--in_dtype",
+        in_dtype,
+        "-dim",
+        f"{rp.model_dim},{rp.inter_dim}",
+        "-t",
+        str(rp.token),
+        "-e",
+        str(rp.experts),
+        "-k",
+        str(rp.topk),
+        "--num_warmup",
+        str(spec.WARMUP_ITERS),
+        "--num_iters",
+        str(spec.BENCH_ITERS),
+        "--tile_m",
+        str(tile["tile_m1"]),
+        "--tile_n",
+        str(tile["tile_n1"]),
+        "--tile_k",
+        str(tile["tile_k1"]),
+        "--tile_n2",
+        str(tile["tile_n2"]),
+        "--tile_k2",
+        str(tile["tile_k2"]),
+        "--skip_ref",
+        "true",
+        "--compare_aiter_ck",
+        "false",
+    ]
+
+
+def _aiter_cmd(rp: RunPoint) -> List[str]:
+    """aiter strict-correctness + e2e guardrail command for one point."""
+    q = DTYPE_ALIAS_TO_AITER_Q[rp.dtype]
+    cmd = [
+        "python3",
+        os.path.join("/sgl-workspace/aiter", "op_tests", "test_moe_2stage.py"),
+        "-q",
+        str(q),
+        "-dim",
+        f"{rp.model_dim},{rp.inter_dim}",
+        "-e",
+        str(rp.experts),
+        "-k",
+        str(rp.topk),
+        "-t",
+        str(rp.token),
+    ]
+    if rp.act == "swiglu":
+        cmd += ["-a", "swiglu"]
+    return cmd
+
+
+def _exec(cmd: List[str], gpu_id: str) -> str:
+    env = dict(os.environ)
+    env["HIP_VISIBLE_DEVICES"] = str(gpu_id)
+    try:
+        out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=3600)
+        return (out.stdout or "") + "\n" + (out.stderr or "")
+    except Exception as e:  # pragma: no cover - live-run only
+        return f"HARNESS_EXEC_ERROR: {e}"
+
+
+def run_point(
+    rp: RunPoint,
+    tile: dict,
+    gpu_id: str,
+    provenance: Provenance,
+    measure_e2e: bool = True,
+) -> PointRow:  # pragma: no cover - exercised only on the gfx950 node
+    """Measure one workload point: FlyDSL per-stage us + aiter e2e/correctness.
+
+    ``tile`` carries tile_m1/n1/k1 and tile_n2/k2 (stage1 + stage2 tiles).  The
+    combined kernel-path us = stage1 + stage2 + sorting; the aiter run supplies
+    the e2e guardrail us, logits_diff, and correctness pass/fail.
+    """
+    flydsl_cmd = _flydsl_cmd(rp, gpu_id, tile)
+    fly_out = _exec(flydsl_cmd, gpu_id)
+    stages = parse_flydsl_stage_us(fly_out)
+    sorting = parse_flydsl_sorting_us(fly_out) or 0.0
+
+    aiter_cmd = _aiter_cmd(rp)
+    command = " ".join(flydsl_cmd) + " ; " + " ".join(aiter_cmd)
+    aiter_res = {"e2e_us": None, "logits_diff": None, "correctness_pass": None}
+    if measure_e2e:
+        aiter_res = parse_aiter_output(_exec(aiter_cmd, gpu_id))
+
+    row = PointRow(
+        provenance=provenance,
+        command=command,
+        model=rp.model,
+        model_dim=rp.model_dim,
+        inter_dim=rp.inter_dim,
+        experts=rp.experts,
+        topk=rp.topk,
+        dtype=rp.dtype,
+        act=rp.act,
+        token=rp.token,
+        tile_m1=tile["tile_m1"],
+        tile_n1=tile["tile_n1"],
+        tile_k1=tile["tile_k1"],
+        tile_m2=tile["tile_m1"],
+        tile_n2=tile["tile_n2"],
+        tile_k2=tile["tile_k2"],
+        stage1_us=stages["stage1_us"],
+        stage2_us=stages["stage2_us"],
+        sorting_us=sorting,
+        e2e_us=aiter_res["e2e_us"],
+        logits_diff=aiter_res["logits_diff"],
+        correctness_pass=aiter_res["correctness_pass"],
+    )
+    if stages["stage1_us"] is not None and stages["stage2_us"] is not None:
+        combined = combined_kernel_path_us(stages["stage1_us"], stages["stage2_us"], sorting)
+        row.kernel_path_us = combined
+        m = compute_metrics(
+            token=rp.token, model_dim=rp.model_dim, inter_dim=rp.inter_dim, topk=rp.topk, combined_us=combined
+        )
+        row.effective_tflops = m["effective_tflops"]
+        row.mfu = m["mfu"]
+    return row
+
+
+# Default (baseline) tile config per shape: matches scripts/run_benchmark.sh.
+def default_tile_for(rp: RunPoint) -> dict:  # pragma: no cover - simple table
+    if rp.model_dim == 3072:  # GPT-OSS
+        return {"tile_m1": 32, "tile_n1": 128, "tile_k1": 256, "tile_n2": 256, "tile_k2": 256}
+    return {"tile_m1": 64, "tile_n1": 256, "tile_k1": 256, "tile_n2": 256, "tile_k2": 256}
+
+
+def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/live
+    import argparse
+
+    ap = argparse.ArgumentParser(description="MXFP4 MoE tuning measurement harness (gfx950)")
+    ap.add_argument("mode", choices=["baseline", "candidate", "validate", "list"])
+    ap.add_argument("--gpu", default=os.environ.get("GPU", "0"), help="GPU id (HIP_VISIBLE_DEVICES)")
+    ap.add_argument("--out", default="", help="output CSV path")
+    ap.add_argument("--csv", default="", help="CSV to validate (validate mode)")
+    ap.add_argument("--no-e2e", action="store_true", help="skip the aiter e2e/correctness run")
+    ap.add_argument("--assume-idle", action="store_true", help="skip the live idle-GPU probe")
+    args = ap.parse_args(argv)
+
+    if args.mode == "list":
+        for rp in build_run_list():
+            print(rp)
+        return 0
+
+    if args.mode == "validate":
+        res = validate_baseline_csv(args.csv)
+        print(json.dumps(res, indent=2))
+        return 0 if res["valid"] else 1
+
+    idle = True if args.assume_idle else check_idle_gpu(args.gpu)
+    prov = Provenance(idle_gpu_verified=idle)
+    prov.__dict__.update(git_provenance())
+    prov.__dict__.update(gpu_provenance(args.gpu))
+
+    rows = []
+    for rp in build_run_list():
+        rows.append(run_point(rp, default_tile_for(rp), args.gpu, prov, measure_e2e=not args.no_e2e))
+    out = args.out or f"/tmp/moe_{args.mode}.csv"
+    write_csv(rows, out)
+    print(f"wrote {len(rows)} rows -> {out}")
+    return 0
+
+
 __all__ = [
     "CSV_COLUMNS",
     "METRIC_FORMULA",
+    "LOCKED_BASELINE_COMMIT",
     "Provenance",
     "PointRow",
+    "RunPoint",
     "parse_flydsl_stage_us",
+    "parse_flydsl_sorting_us",
+    "parse_aiter_output",
     "combined_kernel_path_us",
     "summarize",
     "compute_metrics",
     "git_provenance",
     "gpu_provenance",
+    "check_idle_gpu",
+    "build_run_list",
+    "expected_point_keys",
+    "validate_baseline_row",
+    "validate_baseline_csv",
+    "run_point",
     "write_csv",
+    "read_csv",
 ]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(_main())
