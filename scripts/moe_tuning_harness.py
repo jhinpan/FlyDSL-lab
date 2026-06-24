@@ -961,6 +961,18 @@ def run_point(
     return row
 
 
+def row_missing_kernel_path(row: "PointRow") -> bool:
+    """True if a measured row has no parseable kernel-path timing.
+
+    The FlyDSL benchmark emits no stage times for some tile shapes (e.g. the
+    tile_k1!=256 / tile_n1=512 harness limitation): the subprocess returns but
+    ``parse_flydsl_stage_us`` finds nothing, so the row's stage/kernel-path fields
+    stay ``None``.  Such a row is NOT a measurement and must never be recorded as a
+    ``loss`` -- candidate mode treats it as a fail-closed rejected measurement.
+    """
+    return row.stage1_us is None or row.stage2_us is None or row.kernel_path_us is None
+
+
 # Default (baseline) tile config per shape: matches scripts/run_benchmark.sh.
 def default_tile_for(rp: RunPoint) -> dict:  # pragma: no cover - simple table
     if rp.model_dim == 3072:  # GPT-OSS
@@ -1051,6 +1063,40 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
             )
             for i, rp in enumerate(run_list)
         ]
+        # Fail closed on unmeasured rows: a missing kernel-path row is NOT a loss.
+        import moe_tuning_ledger as _ledger
+
+        bad = [(rp, tiles[i], r) for i, (rp, r) in enumerate(zip(run_list, rows)) if row_missing_kernel_path(r)]
+        if bad:
+            for rp, tile, r in bad:
+                _ledger.append_rejected_candidate(
+                    {
+                        "model": rp.model,
+                        "dtype": rp.dtype,
+                        "act": rp.act,
+                        "token": rp.token,
+                        "stage": 1,
+                        "config": {k: tile.get(k) for k in ("tile_m1", "tile_n1", "tile_k1", "tile_n2", "tile_k2")},
+                        "reason": "no parseable kernel-path stage times emitted (unmeasured shape; e.g. "
+                        "tile_k1!=256 / tile_n1=512 harness limitation)",
+                        "selection": {"model": args.model, "dtype": args.dtype, "tokens": toks},
+                        "gpu_id": prov.gpu_id,
+                        "gpu_model": prov.gpu_model,
+                        "branch": prov.branch,
+                        "commit": prov.commit,
+                        "command": top_command,
+                        "warmup": prov.warmup,
+                        "iters": prov.iters,
+                        "csv_path": "",
+                        "profile_path": "",
+                    }
+                )
+            print(
+                f"ERROR: {len(bad)} candidate point(s) produced no kernel-path measurement; "
+                "recorded as rejected measurements, no CSV written.",
+                file=sys.stderr,
+            )
+            return 2
     else:  # baseline: full grid, default tiles
         run_list = build_run_list()
         rows = [
@@ -1101,6 +1147,7 @@ __all__ = [
     "validate_baseline_row",
     "validate_baseline_csv",
     "run_point",
+    "row_missing_kernel_path",
     "write_csv",
     "read_csv",
 ]

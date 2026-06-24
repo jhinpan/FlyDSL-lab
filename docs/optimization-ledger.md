@@ -86,15 +86,19 @@ file is the human-facing running log.
     — none wins.
   - tile_n=512 (`m32/64/128_n512`): the harness emits an **empty kernel-path** row
     (same class as the `tile_k1!=256` limitation — not measurable here).
-  - tile_m=256 (`m256_n{32,64,128,256}`): **illegal** — `s2=lds_over_limit`
-    (stage2 shares tile_m=256, over the gfx950 163840 B LDS), correctly rejected by
-    the fail-closed CLI and recorded as 4 rejected candidates.
-- Conclusion: **across all MEASURABLE legal k1=256 stage1 tiles, none makes DS V3
-  32/64 an AC-4 win** — best ~−7.5%, ~2–5µs short of the 10% gate. Not covered:
-  tile_k1>256 and tile_n=512 (both hit the harness empty-stage-time limitation),
-  and stage2/secondary levers. Next: the profiling pass + secondary levers (stage2
-  tile / xcd_swizzle / persist_m / async / split-K), plus a harness fix to measure
-  tile_k1>256 / tile_n=512. DS V3 small-token wins remain tokens 1–16 only.
+  - tile_m=256 (`m256_n{32,64,128,256}`): **stage1-LEGAL** (stage1 LDS 132096 B <
+    163840 B) but **NOT measured** — the candidate path couples stage2 `tile_m` to
+    `tile_m1`, and shared stage2 `tile_m=256` exceeds LDS (`s2=lds_over_limit`), so
+    the fail-closed CLI rejected it. Measuring it needs independent `--tile_m2`
+    plumbing (tracked as a follow-up). Recorded as 4 rejected candidates (one
+    active per probe; R10's accidental duplicates superseded).
+- Conclusion (CORRECTLY SCOPED — R9 m/n grid + R10 tile_n=32): **no MEASURED legal
+  k1=256 stage1 tile makes DS V3 32/64 an AC-4 win** — best ~−7.5%, ~2–5µs short of
+  the 10% gate. NOT yet a complete legal-k1=256 sweep: `tile_m=256` is stage1-legal
+  but unmeasured pending independent `tile_m2`; `tile_n=512` and `tile_k1>256` hit
+  the harness empty-stage-time limitation. Next: independent `tile_m2` plumbing,
+  then profiling + secondary levers (stage2 tile / xcd_swizzle / persist_m / async /
+  split-K). DS V3 small-token wins remain tokens 1–16 only.
 - Artifacts: `docs/dsv3_3264_sweep/dsv3_a4w4_m{32,64,128}_n{64,128,256}.csv` (R9, 9
   CSVs) + `docs/dsv3_3264_sweep/r10_*.csv` (R10: tile_n=32 measured, tile_n=512
   empty; tile_m=256 rejected); attempts + rejected records in `docs/attempts.jsonl`.

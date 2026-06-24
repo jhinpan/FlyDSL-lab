@@ -415,6 +415,37 @@ def scan_replay_consistency(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
     return offenders
 
 
+def _rejected_key(rec: dict) -> Tuple:
+    """Identity of a rejected probe: model/dtype/token/act + the tile config.
+    Used to detect duplicate non-superseded rejection records for the same probe."""
+    cfg = rec.get("config") or {}
+    cfg_key = tuple(sorted((str(k), str(v)) for k, v in cfg.items()))
+    return (rec.get("model"), rec.get("dtype"), rec.get("act"), rec.get("token"), cfg_key)
+
+
+def scan_duplicate_rejected_candidates(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
+    """Find probes with more than one ACTIVE (non-superseded) rejected record.
+
+    Two ledger entries that reject the same (model,dtype,act,token,config) probe
+    are a provenance defect -- there must be exactly one active reason per probe
+    (older duplicates must be marked ``superseded_by``).  Returns a list of
+    ``(key, [timestamps])`` for probes with >1 active record (empty == clean).
+    """
+    if not os.path.exists(path):
+        return []
+    seen: Dict[Tuple, List] = {}
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if rec.get("result") != "rejected_candidate" or "superseded_by" in rec:
+                continue
+            seen.setdefault(_rejected_key(rec), []).append(rec.get("timestamp"))
+    return [(k, ts) for k, ts in seen.items() if len(ts) > 1]
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
@@ -426,6 +457,7 @@ __all__ = [
     "compare_csvs",
     "selected_candidate_gate",
     "scan_replay_consistency",
+    "scan_duplicate_rejected_candidates",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",

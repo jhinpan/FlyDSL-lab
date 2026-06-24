@@ -715,6 +715,53 @@ def test_committed_repeatability_attempts_replayable():
     assert off == [], f"non-replayable committed repeatability attempts: {off}"
 
 
+def test_scan_duplicate_rejected_candidates(tmp_path):
+    path = str(tmp_path / "attempts.jsonl")
+    import json as _json
+
+    def _probe(ts, sup=None):
+        r = {
+            "result": "rejected_candidate", "model": "deepseek_v3", "dtype": "a4w4", "act": "silu",
+            "token": 32, "config": {"tile_m1": 256, "tile_n1": 32}, "reason": "x", "timestamp": ts,
+        }
+        if sup is not None:
+            r["superseded_by"] = sup
+        return r
+
+    # Two ACTIVE records for the same probe -> duplicate.
+    open(path, "w").write(_json.dumps(_probe(1.0)) + "\n" + _json.dumps(_probe(2.0)) + "\n")
+    dups = ledger.scan_duplicate_rejected_candidates(path)
+    assert dups and sorted(dups[0][1]) == [1.0, 2.0]
+
+    # Superseding the older one leaves exactly one active -> clean.
+    open(path, "w").write(_json.dumps(_probe(1.0, sup=2.0)) + "\n" + _json.dumps(_probe(2.0)) + "\n")
+    assert ledger.scan_duplicate_rejected_candidates(path) == []
+
+
+def test_committed_rejected_candidates_unique():
+    """Committed ledger must have exactly one active rejected record per probe."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    dups = ledger.scan_duplicate_rejected_candidates(attempts)
+    assert dups == [], f"duplicate active rejected-candidate records: {dups}"
+
+
+def test_row_missing_kernel_path():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
+    # A row with no parsed stage times is "missing" (the tile_n=512 / tile_k!=256 case).
+    blank = harness.PointRow(provenance=prov, command="x", model=rp.model, model_dim=rp.model_dim,
+                             inter_dim=rp.inter_dim, experts=rp.experts, topk=rp.topk, dtype=rp.dtype,
+                             act=rp.act, token=rp.token)
+    assert harness.row_missing_kernel_path(blank) is True
+    # A row with kernel-path populated is not missing.
+    blank.stage1_us = 90.0
+    blank.stage2_us = 70.0
+    blank.kernel_path_us = 160.0
+    assert harness.row_missing_kernel_path(blank) is False
+
+
 def test_compare_csvs_detects_regression_and_wins(tmp_path):
     base = str(tmp_path / "base.csv")
     cand = str(tmp_path / "cand.csv")
