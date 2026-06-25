@@ -80,28 +80,32 @@ file is the human-facing running log.
   Protocol: kernel-path only (`--no-e2e`), reps=3, clocks harness-verified pinned,
   idle verified, via the fail-closed candidate CLI.
 - Baseline kp: t32=179.8µs, t64=203.0µs → gate needs t32≤161.8, t64≤182.7.
-- **No measurable legal k1=256 stage1 tile clears the gate.** Best balanced stays
-  stage1 `m32_n128` (t32 166.4 −7.5%, t64 187.7 −7.5%). R10 added configs:
-  - tile_n=32: `m32_n32` −1.9%/−4.5%, `m64_n32` +4.4%/+2.2%, `m128_n32` +70%/+88%
-    — none wins.
-  - tile_n=512 (`m32/64/128_n512`): the harness emits an **empty kernel-path** row
-    (same class as the `tile_k1!=256` limitation — not measurable here).
-  - tile_m=256 (`m256_n{32,64,128,256}`): **stage1-LEGAL** (stage1 LDS 132096 B <
-    163840 B) but **NOT measured** — the candidate path couples stage2 `tile_m` to
-    `tile_m1`, and shared stage2 `tile_m=256` exceeds LDS (`s2=lds_over_limit`), so
-    the fail-closed CLI rejected it. Measuring it needs independent `--tile_m2`
-    plumbing (tracked as a follow-up). Recorded as 4 rejected candidates (one
-    active per probe; R10's accidental duplicates superseded).
-- Conclusion (CORRECTLY SCOPED — R9 m/n grid + R10 tile_n=32): **no MEASURED legal
-  k1=256 stage1 tile makes DS V3 32/64 an AC-4 win** — best ~−7.5%, ~2–5µs short of
-  the 10% gate. NOT yet a complete legal-k1=256 sweep: `tile_m=256` is stage1-legal
-  but unmeasured pending independent `tile_m2`; `tile_n=512` and `tile_k1>256` hit
-  the harness empty-stage-time limitation. Next: independent `tile_m2` plumbing,
-  then profiling + secondary levers (stage2 tile / xcd_swizzle / persist_m / async /
-  split-K). DS V3 small-token wins remain tokens 1–16 only.
-- Artifacts: `docs/dsv3_3264_sweep/dsv3_a4w4_m{32,64,128}_n{64,128,256}.csv` (R9, 9
-  CSVs) + `docs/dsv3_3264_sweep/r10_*.csv` (R10: tile_n=32 measured, tile_n=512
-  empty; tile_m=256 rejected); attempts + rejected records in `docs/attempts.jsonl`.
+- **No stage1 tile makes DS V3 32/64 an AC-4 win.** The full stage1 search space
+  is now accounted (prior-loop sweeps + second-loop `tile_m2` decouple):
+  - prior-loop small/mid tiles `tile_m∈{32,64,128} × tile_n∈{32,64,128,256}`
+    (k=256): best is `m32_n128` at −7.5%/−7.5% — short of the −10% gate; many
+    regress.
+  - `tile_m1=256` (now reachable via the independent stage2 `tile_m2=64`):
+    catastrophic losses — `n128` +434%/+426%, `n64` +882%/+1008%, `n32`
+    +3004%/+3390% (a 256-row stage1 tile wastes work on 32–64 tokens).
+  - `tile_n1=512`: **rejected pre-compile** by the legality filter
+    (`inter_dim_not_div_tile_n`; inter_dim=256 not divisible by 512) — it is
+    illegal, not a harness gap.
+  - `tile_m1=256, tile_n1=256`: legality-legal but **unsupported** — the stage1
+    epilog compile path hits an `else_block=None` limitation (precise fail-closed
+    record).
+  - `tile_k1≠256`: legality-legal by divisibility/LDS but **rejected pre-compile**
+    (`stage1_tile_k_unsupported`) — the stage1 mixed-fp4/fp8 compile path only
+    supports tile_k=256 (tile_k>256 crashes `compute_tile`).
+- Conclusion: **the stage1-tile lever is exhausted for DS V3 32/64** — every legal
+  tile is measured-and-losing, rejected pre-compile (illegal/unsupported), or a
+  precise fail-closed compile limitation. The remaining lever is the **profiling
+  pass → stage2/secondary levers** (stage2 tile / xcd_swizzle / persist_m / async /
+  split-K), NOT stage1 tile size. DS V3 small-token wins remain tokens 1–16 only.
+- Artifacts: prior-loop `docs/dsv3_3264_sweep/*.csv`; second-loop
+  `docs/loop2_tilem2/*.csv`; attempts + precise rejected records (n512 =
+  inter_dim_not_div_tile_n; tile_k≠256 = stage1_tile_k_unsupported; m256/n256 =
+  epilog compile limit) in `docs/attempts.jsonl`.
 
 ### Repeatability re-measure — TWO-METRIC (AC-1.1 MET) — Kimi K2 a4w4 baseline
 

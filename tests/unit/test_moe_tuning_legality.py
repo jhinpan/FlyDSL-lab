@@ -77,11 +77,13 @@ def test_accepts_run_benchmark_configs(stage, model_dim, inter_dim, tile_m, tile
     assert res.lds_bytes is not None and res.lds_bytes <= LDS_LIMIT_BYTES["gfx950"]
 
 
-def test_rejects_tile_k_bytes_not_div_64():
-    # fp4 a_elem_bytes=1 -> tile_k_bytes = tile_k; 288 % 64 != 0.  tile_k>=256 ok.
+def test_rejects_stage1_nonstandard_tile_k():
+    # tile_k=288 is rejected at stage1: the stage1 mixed-fp4 path only supports
+    # tile_k=256, so the stage1_tile_k_unsupported guard fires (it precedes the
+    # legacy tile_k_bytes%64 check, which is now effectively stage2-only).
     res = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=288, a_dtype="fp4")
     assert not res.legal
-    assert res.reason == "tile_k_bytes_not_div_64"
+    assert res.reason == "stage1_tile_k_unsupported"
 
 
 def test_rejects_splitk_k_per_batch_not_div_tile_k():
@@ -127,18 +129,18 @@ def test_rejects_lds_over_limit():
 
 def test_stage1_fp4_lds_mirrors_builder_no_vec_pack_halving():
     # Regression: stage1 sizes _single_x_bytes from the FULL lds_stride for fp4
-    # (no a_elem_vec_pack division), matching compile_mixed_moe_gemm1.  These
-    # large-tile_k fp4 configs overflow the gfx950 163840-byte limit and MUST be
-    # rejected -- an earlier version halved the fp4 stride and wrongly accepted
-    # them.  Source-faithful footprints: 230400 and 197632 bytes.
+    # (no a_elem_vec_pack division), matching compile_mixed_moe_gemm1.  The mirror
+    # math must still report the source-faithful footprints 230400 / 197632 bytes
+    # for these large-tile_k fp4 configs.  (check_tile_config now rejects tile_k!=256
+    # earlier via stage1_tile_k_unsupported, so we assert the LDS mirror directly.)
     from kernels.moe_tuning import stage1_lds_bytes
 
     r1 = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=32, tile_n=32, tile_k=3584, a_dtype="fp4")
-    assert not r1.legal and r1.reason == "lds_over_limit"
+    assert not r1.legal and r1.reason == "stage1_tile_k_unsupported"
     assert stage1_lds_bytes(tile_m=32, tile_n=32, tile_k=3584, a_dtype="fp4") == 230400
 
     r2 = check_tile_config(stage=1, model_dim=3072, inter_dim=3072, tile_m=32, tile_n=32, tile_k=3072, a_dtype="fp4")
-    assert not r2.legal and r2.reason == "lds_over_limit"
+    assert not r2.legal and r2.reason == "stage1_tile_k_unsupported"
     assert stage1_lds_bytes(tile_m=32, tile_n=32, tile_k=3072, a_dtype="fp4") == 197632
 
     # fp4 and fp8 share the same single_x sizing at stage1 (a_elem_bytes==1, no
@@ -174,6 +176,23 @@ def test_rejects_stage1_tile_n_not_dividing_inter_dim():
     # large inter_dim shapes (e.g. GPT-OSS 3072) are unaffected.
     ok2 = check_tile_config(stage=1, model_dim=3072, inter_dim=3072, tile_m=32, tile_n=128, tile_k=256, a_dtype="fp4")
     assert ok2.legal
+
+
+def test_rejects_stage1_fp4_tile_k_not_256():
+    # tile_k=512 passes divisibility (model_dim % 512 == 0) and fits LDS, but the
+    # stage1 mixed-fp4/fp8 compile path only supports tile_k=256 (tile_k>256 hits a
+    # compute_tile IndexError at compile).  Must be rejected pre-compile.
+    res = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=512, a_dtype="fp4")
+    assert not res.legal
+    assert res.reason == "stage1_tile_k_unsupported"
+    # tile_k=256 stays legal.
+    assert check_tile_config(
+        stage=1, model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=256, a_dtype="fp4"
+    ).legal
+    # stage2 tile_k is governed by inter_dim divisibility, not this stage1 guard.
+    assert check_tile_config(
+        stage=2, model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=256, a_dtype="fp4", sort_block_m=256
+    ).legal
 
 
 def test_rejects_bad_stage_and_dtype():

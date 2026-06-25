@@ -970,11 +970,13 @@ def run_point(
 def row_missing_kernel_path(row: "PointRow") -> bool:
     """True if a measured row has no parseable kernel-path timing.
 
-    The FlyDSL benchmark emits no stage times for some tile shapes (e.g. the
-    tile_k1!=256 / tile_n1=512 harness limitation): the subprocess returns but
-    ``parse_flydsl_stage_us`` finds nothing, so the row's stage/kernel-path fields
-    stay ``None``.  Such a row is NOT a measurement and must never be recorded as a
-    ``loss`` -- candidate mode treats it as a fail-closed rejected measurement.
+    Some legality-legal tile shapes crash the stage1/stage2 compile (e.g. the
+    tile_m1=256/tile_n1=256 stage1-epilog ``else_block`` limitation): the
+    subprocess returns but ``parse_flydsl_stage_us`` finds no stage times, so the
+    row's stage/kernel-path fields stay ``None``.  Such a row is NOT a measurement
+    and must never be recorded as a ``loss`` -- candidate mode treats it as a
+    fail-closed rejected measurement.  (Note: tile_n1=512 and tile_k1!=256 are now
+    rejected pre-compile by the legality filter and never reach this path.)
     """
     return row.stage1_us is None or row.stage2_us is None or row.kernel_path_us is None
 
@@ -1086,8 +1088,9 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                         "config": {
                             k: tile.get(k) for k in ("tile_m1", "tile_n1", "tile_k1", "tile_m2", "tile_n2", "tile_k2")
                         },
-                        "reason": "no parseable kernel-path stage times emitted (unmeasured shape; e.g. "
-                        "tile_k1!=256 / tile_n1=512 harness limitation)",
+                        "reason": "no parseable kernel-path stage times emitted: the subprocess returned "
+                        "but compiled no stage times (legality-legal but uncompilable shape, e.g. the "
+                        "tile_m1=256/tile_n1=256 stage1-epilog else_block limitation)",
                         "selection": {"model": args.model, "dtype": args.dtype, "tokens": toks},
                         "gpu_id": prov.gpu_id,
                         "gpu_model": prov.gpu_model,

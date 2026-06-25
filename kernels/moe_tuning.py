@@ -237,6 +237,20 @@ def _check_stage1(
             False, 1, "tile_k_lt_256", f"tile_k={tile_k} < 256 (MX-FP4 layout requires tile_k>=256)", params=params
         )
 
+    # The stage1 mixed-fp4/fp8 compile path currently only supports tile_k == 256.
+    # tile_k > 256 passes divisibility/LDS but crashes the stage1 kernel compile
+    # (compute_tile IndexError in mixed_moe_gemm_2stage), so it must be rejected
+    # pre-compile rather than surfacing as an empty kernel-path row.  Lift this
+    # guard if the stage1 kernel gains tile_k>256 support.
+    if tile_k != 256:
+        return TileCheck(
+            False,
+            1,
+            "stage1_tile_k_unsupported",
+            f"tile_k={tile_k} unsupported by the stage1 mixed-fp4/fp8 compile path (only tile_k=256)",
+            params=params,
+        )
+
     if tile_n < 32 or tile_n % 32 != 0:
         return TileCheck(
             False, 1, "tile_n_not_mult_32", f"tile_n={tile_n} must be a positive multiple of 32", params=params
