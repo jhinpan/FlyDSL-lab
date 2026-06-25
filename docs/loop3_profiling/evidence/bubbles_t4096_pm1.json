@@ -1,0 +1,87 @@
+{
+ "occupancy": {
+  "available": true,
+  "peak_waves": 20,
+  "mean_waves": 3.22,
+  "samples": 716,
+  "occupancy_json": true
+ },
+ "totals": {
+  "instructions": 947,
+  "total_latency": 49730488,
+  "total_stall": 47081996,
+  "total_idle": 395012,
+  "hitcount": 401800,
+  "stall_pct": 94.7
+ },
+ "stall_taxonomy": {
+  "by_class": {
+   "vmcnt": {
+    "cycles": 28757604,
+    "pct": 61.08,
+    "rank": 1,
+    "is_bubble": true
+   },
+   "vmem_load": {
+    "cycles": 12805804,
+    "pct": 27.2,
+    "rank": 2,
+    "is_bubble": false
+   },
+   "barrier": {
+    "cycles": 3862480,
+    "pct": 8.2,
+    "rank": 3,
+    "is_bubble": true
+   },
+   "mfma": {
+    "cycles": 588592,
+    "pct": 1.25,
+    "rank": 4,
+    "is_bubble": false
+   },
+   "valu": {
+    "cycles": 313860,
+    "pct": 0.67,
+    "rank": 5,
+    "is_bubble": false
+   },
+   "vmem_store": {
+    "cycles": 293444,
+    "pct": 0.62,
+    "rank": 6,
+    "is_bubble": false
+   },
+   "lgkmcnt": {
+    "cycles": 290800,
+    "pct": 0.62,
+    "rank": 7,
+    "is_bubble": true
+   },
+   "lds": {
+    "cycles": 109340,
+    "pct": 0.23,
+    "rank": 8,
+    "is_bubble": false
+   },
+   "salu": {
+    "cycles": 56876,
+    "pct": 0.12,
+    "rank": 9,
+    "is_bubble": false
+   },
+   "smem": {
+    "cycles": 3192,
+    "pct": 0.01,
+    "rank": 10,
+    "is_bubble": false
+   },
+   "branch": {
+    "cycles": 4,
+    "pct": 0.0,
+    "rank": 11,
+    "is_bubble": false
+   }
+  }
+ }
+}
