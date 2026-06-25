@@ -78,6 +78,7 @@ CSV_COLUMNS = [
     "persist_m2",
     "xcd_swizzle1",
     "xcd_swizzle2",
+    "stage2_lds_load_bytes",
     # metrics (median + p95 over iters)
     "stage1_us",
     "stage2_us",
@@ -192,6 +193,7 @@ class PointRow:
     persist_m2: int = 4
     xcd_swizzle1: int = 0
     xcd_swizzle2: int = 0
+    stage2_lds_load_bytes: int = 16
     stage1_us: Optional[float] = None
     stage2_us: Optional[float] = None
     sorting_us: Optional[float] = None
@@ -243,6 +245,7 @@ class PointRow:
             "persist_m2",
             "xcd_swizzle1",
             "xcd_swizzle2",
+            "stage2_lds_load_bytes",
             "stage1_us",
             "stage2_us",
             "sorting_us",
@@ -503,6 +506,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         "persist_m2",
         "xcd_swizzle1",
         "xcd_swizzle2",
+        "stage2_lds_load_bytes",
     ):
         if overrides.get(k) is not None:
             tile[k] = int(overrides[k])
@@ -532,6 +536,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         sort_block_m=sort_block_m2,
         persist_m=tile["persist_m2"],
         xcd_swizzle=tile["xcd_swizzle2"],
+        stage2_lds_load_bytes=tile["stage2_lds_load_bytes"],
     )
     if not (r1.legal and r2.legal):
         raise ValueError(f"illegal candidate tiles for {rp.model}/{rp.dtype}: s1={r1.reason} s2={r2.reason}")
@@ -806,6 +811,8 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
         str(tile.get("xcd_swizzle1", 0)),
         "--xcd_swizzle2",
         str(tile.get("xcd_swizzle2", 0)),
+        "--stage2_lds_load_bytes",
+        str(tile.get("stage2_lds_load_bytes", 16)),
         "--skip_ref",
         "true",
         "--compare_aiter_ck",
@@ -973,6 +980,7 @@ def run_point(
         persist_m2=tile.get("persist_m2", 4),
         xcd_swizzle1=tile.get("xcd_swizzle1", 0),
         xcd_swizzle2=tile.get("xcd_swizzle2", 0),
+        stage2_lds_load_bytes=tile.get("stage2_lds_load_bytes", 16),
         flydsl_command=flydsl_command_str,
         strict_error=strict_error,
         error_category=error_category,
@@ -1024,7 +1032,13 @@ def row_missing_kernel_path(row: "PointRow") -> bool:
 # Launch-mapping knobs are source-faithful builder defaults (stage1 persist_m=1,
 # stage2 persist_m=4, both xcd_swizzle=0) so a default-tile run reproduces the
 # locked baseline.
-_DEFAULT_LAUNCH = {"persist_m1": 1, "persist_m2": 4, "xcd_swizzle1": 0, "xcd_swizzle2": 0}
+_DEFAULT_LAUNCH = {
+    "persist_m1": 1,
+    "persist_m2": 4,
+    "xcd_swizzle1": 0,
+    "xcd_swizzle2": 0,
+    "stage2_lds_load_bytes": 16,
+}
 
 
 def default_tile_for(rp: RunPoint) -> dict:  # pragma: no cover - simple table
@@ -1085,6 +1099,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "persist-m2",
         "xcd-swizzle1",
         "xcd-swizzle2",
+        "stage2-lds-load-bytes",
     ):
         ap.add_argument(f"--{_k}", type=int, default=None, help=f"candidate {_k.replace('-', '_')} override")
     args = ap.parse_args(argv)
@@ -1123,6 +1138,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "persist_m2": args.persist_m2,
         "xcd_swizzle1": args.xcd_swizzle1,
         "xcd_swizzle2": args.xcd_swizzle2,
+        "stage2_lds_load_bytes": args.stage2_lds_load_bytes,
     }
 
     if args.mode == "candidate":
@@ -1174,6 +1190,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                                 "persist_m2",
                                 "xcd_swizzle1",
                                 "xcd_swizzle2",
+                                "stage2_lds_load_bytes",
                             )
                         },
                         "reason": "no parseable kernel-path stage times emitted: the subprocess returned "

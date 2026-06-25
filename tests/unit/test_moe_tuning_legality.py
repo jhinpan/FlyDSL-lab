@@ -284,6 +284,20 @@ def test_launch_knob_legality():
         assert check_tile_config(stage=stg, **base, xcd_swizzle=4).legal, stg
 
 
+def test_stage2_lds_load_bytes_legality():
+    base = dict(model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=256, a_dtype="fp4")
+    # Default (16) and the 8B variant are legal on stage2.
+    assert check_tile_config(stage=2, **base).legal
+    assert check_tile_config(stage=2, **base, stage2_lds_load_bytes=16).legal
+    assert check_tile_config(stage=2, **base, stage2_lds_load_bytes=8).legal
+    # Any value outside {8,16} is rejected on stage2.
+    for bad in (0, 4, 12, 32):
+        r = check_tile_config(stage=2, **base, stage2_lds_load_bytes=bad)
+        assert not r.legal and r.reason == "stage2_lds_load_bytes_invalid", bad
+    # Stage1 ignores the stage2-only knob (no false rejection).
+    assert check_tile_config(stage=1, **base, stage2_lds_load_bytes=4).legal
+
+
 def test_rejects_stage1_fp4_tile_k_not_256():
     # tile_k=512 passes divisibility (model_dim % 512 == 0) and fits LDS, but the
     # stage1 mixed-fp4/fp8 compile path only supports tile_k=256 (tile_k>256 hits a

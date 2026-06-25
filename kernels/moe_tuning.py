@@ -467,6 +467,7 @@ def check_tile_config(
     sort_block_m: int = 0,
     persist_m: Optional[int] = None,
     xcd_swizzle: int = 0,
+    stage2_lds_load_bytes: int = 16,
     gpu_arch: str = "gfx950",
 ) -> TileCheck:
     """Check whether a single tile candidate is legal for ``stage`` (1 or 2).
@@ -500,10 +501,21 @@ def check_tile_config(
         "sort_block_m": sort_block_m,
         "persist_m": eff_persist_m,
         "xcd_swizzle": xcd_swizzle,
+        "stage2_lds_load_bytes": stage2_lds_load_bytes,
         "gpu_arch": gpu_arch,
     }
     if a_dtype not in _A_ELEM_BYTES:
         return TileCheck(False, stage, "bad_a_dtype", f"a_dtype={a_dtype!r} not supported", params=params)
+
+    # Stage2-only A-from-LDS load width: the builder accepts only {8,16}.
+    if stage == 2 and stage2_lds_load_bytes not in (8, 16):
+        return TileCheck(
+            False,
+            2,
+            "stage2_lds_load_bytes_invalid",
+            f"stage2_lds_load_bytes={stage2_lds_load_bytes} not in {{8,16}}",
+            params=params,
+        )
 
     # Launch-mapping knob legality (both stages share xcd_swizzle>=0; stage1 also
     # requires persist_m>=1 since the builder indexes a fixed persist_m loop).

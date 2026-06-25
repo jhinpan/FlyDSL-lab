@@ -2438,6 +2438,7 @@ def compile_mixed_moe_gemm2(
     sort_block_m: int = 0,
     b_nt: int = 2,
     xcd_swizzle: int = 0,
+    stage2_lds_load_bytes: int = 16,
 ):
     """Compile stage2 kernel (`moe_gemm2`) and return the compiled executable.
 
@@ -2628,13 +2629,20 @@ def compile_mixed_moe_gemm2(
         _cu_num = _get_cu_num()
     else:
         _cu_num = 0
+    if stage2_lds_load_bytes not in (8, 16):
+        raise ValueError(f"stage2_lds_load_bytes must be 8 or 16, got {stage2_lds_load_bytes}")
     _sbm_tag = "" if _sort_block_m == tile_m else f"_sbm{_sort_block_m}"
     _pm_tag = f"_persist_cu{_cu_num}" if _persistent else f"_pm{persist_m}"
     _xcd_tag = f"_xcd{xcd_swizzle}" if xcd_swizzle > 0 else ""
+    # Stage2 A-from-LDS load width: 16 (default, single dwordx4) vs 8 (two
+    # contiguous dwordx2 loads).  The 8B path is byte-identical to the 16B split
+    # (same XOR16 coords, same a0/a1 halves) -- it only changes the LDS load
+    # instruction shape, targeting the small-token stage2 LDS-wait bottleneck.
+    _ldsld_tag = "" if stage2_lds_load_bytes == 16 else f"_ldsld{stage2_lds_load_bytes}"
     module_name = (
         f"mfma_moe2_a{a_dtype}_w{b_dtype}_{out_s}_{epilog_tag}"
         f"_t{tile_m}x{tile_n}x{tile_k}"
-        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}"
+        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}{_ldsld_tag}"
     ).replace("-", "_")
     # -- LDS sizing (pure Python; no MLIR Context needed) ---------------------
     # Ping-pong A2 tiles via separate allocators (like stage1).
@@ -3326,11 +3334,26 @@ def compile_mixed_moe_gemm2(
                                 elem_bytes=elem_bytes,
                             )
 
-                # --- A LDS load helper for K64 (load 16B once, extract 2x i64 halves) ---
+                # --- A LDS load helper for K64 ---
+                # 16B (default): one dwordx4 load, split into 2x i64 halves.
+                # 8B variant: two contiguous dwordx2 loads at the same XOR16 coords
+                # (idx and idx + half), each bitcast to one i64.  The bytes returned
+                # are identical to the 16B split (a0=elems[0:half], a1=elems[half:]),
+                # so correctness/layout are unchanged; only the LDS load shape differs.
+                _ldsld8 = stage2_lds_load_bytes == 8
+                vec8_x_a = T.vec(vec8_elems, x_elem)
+                vec1_i64 = T.vec(1, i64)
+
                 def lds_load_packs_k64(curr_row_a_lds, col_base, lds_buffer):
                     col_base_swz_bytes = swizzle_xor16(curr_row_a_lds, col_base, k_blocks16)
                     col_base_swz = col_base_swz_bytes if elem_bytes == 1 else (col_base_swz_bytes / arith.index(2))
                     idx_a16 = crd2idx([fx.Int32(curr_row_a_lds), fx.Int32(col_base_swz)], layout_lds)
+                    if const_expr(_ldsld8):
+                        lo = vector.load_op(vec8_x_a, lds_buffer, [idx_a16])
+                        hi = vector.load_op(vec8_x_a, lds_buffer, [idx_a16 + arith.index(vec8_elems)])
+                        a0 = vector.extract(vector.bitcast(vec1_i64, lo), static_position=[0], dynamic_position=[])
+                        a1 = vector.extract(vector.bitcast(vec1_i64, hi), static_position=[0], dynamic_position=[])
+                        return a0, a1
                     loaded_a16 = vector.load_op(vec16_x, lds_buffer, [idx_a16])
                     a_i64x2 = vector.bitcast(vec2_i64, loaded_a16)
                     a0 = vector.extract(a_i64x2, static_position=[0], dynamic_position=[])

@@ -1979,6 +1979,39 @@ def test_candidate_tile_for_launch_knob_overrides_and_legality():
         harness.candidate_tile_for(rp, {"xcd_swizzle1": -1})
 
 
+def test_stage2_lds_load_bytes_threading():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    import pytest as _pytest
+
+    # default tile carries the source-faithful 16
+    assert harness.default_tile_for(rp)["stage2_lds_load_bytes"] == 16
+    # override to 8 applied; illegal value rejected pre-compile
+    assert harness.candidate_tile_for(rp, {"stage2_lds_load_bytes": 8})["stage2_lds_load_bytes"] == 8
+    with _pytest.raises(ValueError, match="stage2_lds_load_bytes_invalid"):
+        harness.candidate_tile_for(rp, {"stage2_lds_load_bytes": 4})
+    # _flydsl_cmd emits the flag with the resolved value
+    tile = harness.candidate_tile_for(rp, {"stage2_lds_load_bytes": 8})
+    cmd = harness._flydsl_cmd(rp, "0", tile)
+    assert "--stage2_lds_load_bytes" in cmd and cmd[cmd.index("--stage2_lds_load_bytes") + 1] == "8"
+    # CSV serializes the column (default 16)
+    prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
+    row = harness.PointRow(
+        provenance=prov,
+        command="x",
+        model="deepseek_v3",
+        model_dim=7168,
+        inter_dim=256,
+        experts=257,
+        topk=9,
+        dtype="a4w4",
+        act="silu",
+        token=32,
+        stage2_lds_load_bytes=8,
+    )
+    d = row.to_csv_dict()
+    assert "stage2_lds_load_bytes" in harness.CSV_COLUMNS and d["stage2_lds_load_bytes"] == 8
+
+
 def test_flydsl_cmd_emits_launch_knob_flags():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     tile = harness.candidate_tile_for(rp, {"persist_m2": 8, "xcd_swizzle2": 2})
