@@ -32,9 +32,9 @@ _PROFILE_DIR = os.path.join(_REPO_ROOT, "docs", "loop2_profiling")
 def test_profile_report_table_matches_csv():
     """The profiling report's AUTOGEN counter table must match its source CSV.
 
-    The R8 re-collect changed dsv3_a4w4_pmc_summary.csv but left the hand-written
-    report table stale.  summarize.py now machine-generates the report table from
-    the CSV; this test fails fast if they ever drift again.
+    An earlier re-collect changed dsv3_a4w4_pmc_summary.csv but left the
+    hand-written report table stale.  summarize.py now machine-generates the
+    report table from the CSV; this test fails fast if they ever drift again.
     """
     csv_path = os.path.join(_PROFILE_DIR, "dsv3_a4w4_pmc_summary.csv")
     report = os.path.join(_PROFILE_DIR, "dsv3_a4w4_profile.md")
@@ -246,6 +246,22 @@ def test_rejects_stage1_tile_n_not_dividing_inter_dim():
     # large inter_dim shapes (e.g. GPT-OSS 3072) are unaffected.
     ok2 = check_tile_config(stage=1, model_dim=3072, inter_dim=3072, tile_m=32, tile_n=128, tile_k=256, a_dtype="fp4")
     assert ok2.legal
+
+
+def test_rejects_stage2_tile_n_not_div_64():
+    # stage2 C-shuffle epilog requires tile_n % (CShuffleNLane*EVec=64) == 0, and
+    # the scale-pack pack_N = min(2, tile_n//64) is 0 (div-by-zero) for tile_n<64.
+    # tile_n % 64 != 0 covers both -> reject pre-compile.
+    for bad in (32, 112, 224):  # 32<64 (pack_N=0); 112/224 not multiples of 64
+        res = check_tile_config(
+            stage=2, model_dim=7168, inter_dim=256, tile_m=64, tile_n=bad, tile_k=256, a_dtype="fp4", sort_block_m=0
+        )
+        assert not res.legal and res.reason == "stage2_tile_n_not_div_64", bad
+    # multiples of 64 that also divide model_dim stay legal.
+    for ok in (64, 128, 256, 448, 512, 896, 1024):
+        assert check_tile_config(
+            stage=2, model_dim=7168, inter_dim=256, tile_m=64, tile_n=ok, tile_k=256, a_dtype="fp4", sort_block_m=0
+        ).legal, ok
 
 
 def test_rejects_stage1_fp4_tile_k_not_256():

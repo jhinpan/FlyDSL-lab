@@ -1588,6 +1588,10 @@ def test_candidate_tile_for_overrides_and_legality():
 
     with _pytest.raises(ValueError):
         harness.candidate_tile_for(rp, {"tile_m1": 16})
+    # Stage2 tile_n2 not divisible by 64 is rejected pre-compile (C-shuffle epilog
+    # requires it; pack_N=tile_n//64 is also 0 for tile_n<64).
+    with _pytest.raises(ValueError, match="stage2_tile_n_not_div_64"):
+        harness.candidate_tile_for(rp, {"tile_m2": 64, "tile_n2": 32})
 
 
 def test_prepare_candidate_run_fail_closed(tmp_path, monkeypatch):

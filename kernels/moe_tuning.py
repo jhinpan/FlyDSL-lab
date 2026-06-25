@@ -368,6 +368,19 @@ def _check_stage2(
             False, 2, "tile_k_lt_256", f"tile_k={tile_k} < 256 (MX-FP4 layout requires tile_k>=256)", params=params
         )
 
+    # The stage2 C-shuffle epilog requires tile_n divisible by
+    # CShuffleNLane*EVec = 64 (the builder raises otherwise), and the scale-pack
+    # path uses pack_N = min(2, tile_n // 64) which is 0 (div-by-zero) for
+    # tile_n < 64.  tile_n % 64 == 0 covers both: reject pre-compile.
+    if tile_n % 64 != 0:
+        return TileCheck(
+            False,
+            2,
+            "stage2_tile_n_not_div_64",
+            f"tile_n={tile_n} not divisible by 64 (stage2 C-shuffle requires tile_n % (CShuffleNLane*EVec=64) == 0)",
+            params=params,
+        )
+
     # model_dim % 16 (kernel asserts) and the N-tile coverage model_dim % tile_n.
     if model_dim % 16 != 0:
         return TileCheck(False, 2, "model_dim_not_div_16", f"model_dim={model_dim} not divisible by 16", params=params)
