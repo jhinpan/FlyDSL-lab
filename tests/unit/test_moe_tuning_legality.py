@@ -17,9 +17,30 @@ from kernels.moe_tuning import (
     LDS_LIMIT_BYTES,
     check_tile_config,
     enumerate_legal_configs,
+    stage2_block_count,
 )
 
 pytestmark = pytest.mark.l0_backend_agnostic
+
+
+def test_stage2_block_count_decoupled_and_default_invariant():
+    # Decoupled stage2 tile (tile_m2 < tile_m1): more M-tiles than the routing
+    # block count, so reusing the stage1 block count would under-launch.
+    # Padded rows = blocks_at_tile_m1 * tile_m1.
+    tile_m1, tile_m2 = 256, 64
+    blocks_at_m1 = 5
+    num_valid_rows = blocks_at_m1 * tile_m1  # 1280
+    # default coupled: stage2 tile == stage1 block size -> equals routing blocks.
+    assert stage2_block_count(num_valid_rows, tile_m1) == blocks_at_m1
+    # decoupled: 4x as many 64-row tiles cover the same 1280 padded rows.
+    assert stage2_block_count(num_valid_rows, tile_m2) == blocks_at_m1 * (tile_m1 // tile_m2)
+    # ceil behavior on a non-multiple extent.
+    assert stage2_block_count(130, 64) == 3
+    assert stage2_block_count(0, 64) == 0
+    with pytest.raises(ValueError):
+        stage2_block_count(128, 0)
+    with pytest.raises(ValueError):
+        stage2_block_count(-1, 64)
 
 
 # (stage, model_dim, inter_dim, tile_m, tile_n, tile_k, a_dtype)

@@ -84,6 +84,25 @@ def _a_elem_bytes(a_dtype: str) -> int:
     return _A_ELEM_BYTES[a_dtype]
 
 
+def stage2_block_count(num_valid_rows: int, stage2_tile_m: int) -> int:
+    """Number of stage2 M-tiles to launch over ``num_valid_rows`` padded rows.
+
+    The mixed stage2 kernel sizes its launch grid from the passed expert-id count
+    (``gy = ceil(count / persist_m)``, per-tile stride = stage2 ``tile_m``).  When
+    stage2's ``tile_m`` is decoupled from stage1's routing block size, the count
+    must be recomputed from the padded-row extent rather than reusing the stage1
+    routing block count, or stage2 under-launches (and times incomplete work).
+
+    With the coupled default (stage2 ``tile_m`` == stage1 block size), this equals
+    the routing block count, so default behavior is unchanged.
+    """
+    if stage2_tile_m <= 0:
+        raise ValueError(f"stage2_tile_m must be positive, got {stage2_tile_m}")
+    if num_valid_rows < 0:
+        raise ValueError(f"num_valid_rows must be non-negative, got {num_valid_rows}")
+    return (num_valid_rows + stage2_tile_m - 1) // stage2_tile_m
+
+
 def stage1_lds_bytes(
     *,
     tile_m: int,

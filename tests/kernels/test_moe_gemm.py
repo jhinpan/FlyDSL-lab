@@ -1064,6 +1064,16 @@ def run_moe_stage2(
     is_fp4_path = is_fp4 or is_a8w4
     use_packed_int4 = is_int4 or is_int4_bf16
 
+    # Independent stage2 tile_m (sort_block_m != 0 signals stage2 tile_m differs
+    # from stage1's block size) is only wired through the FP4/a8w4 stage2 path,
+    # which recomputes its launch count and maps tiles back to experts via
+    # sort_block_m.  Reject it on non-FP4 paths rather than silently under-launch.
+    if int(sort_block_m) != 0 and not is_fp4_path:
+        raise ValueError(
+            f"independent stage2 tile_m (sort_block_m={sort_block_m}) is only "
+            f"supported on the FP4/a8w4 path, not in_dtype={in_dtype!r}"
+        )
+
     # Quantize inputs / weights.
     if in_dtype == "fp8":
         x_q, scale_x = pertoken_quant(x_fp32, quant_dtype=DTYPE_FP8)
@@ -1273,6 +1283,25 @@ def run_moe_stage2(
     if is_fp4_path:
         fp4_accumulate = not bool(use_reduce)
         a_dtype_kernel = "fp8" if is_a8w4 else "fp4"
+        # Stage2 launches one M-tile of size `tile_m` (= caller's tile_m2) per
+        # padded row block; the kernel sizes its grid from `i32_size_expert_ids_in`
+        # (gy = ceil(size / persist_m), per-tile stride tile_m).  `blocks` is the
+        # routing block count built with stage1's block size (tile_m1), so when
+        # stage2's tile_m differs from tile_m1 we recompute the stage2 M-tile count
+        # from the padded-row extent (num_valid_ids[0]); reusing `blocks` would
+        # under-launch stage2 and time incomplete work.
+        from kernels.moe_tuning import stage2_block_count
+
+        _n_valid_rows = int(num_valid_ids[0].item())
+        stage2_m_blocks = stage2_block_count(_n_valid_rows, int(tile_m))
+        # Invariant: with the default coupled tile (stage2 tile_m == stage1 block
+        # size, i.e. sort_block_m in {0, tile_m}), the recomputed count must equal
+        # `blocks`, so default behavior is provably unchanged.
+        if int(sort_block_m) in (0, int(tile_m)):
+            assert stage2_m_blocks == int(blocks), (
+                f"stage2 block-count invariant broken: ceil({_n_valid_rows}/{tile_m})="
+                f"{stage2_m_blocks} != blocks={blocks}"
+            )
         exe = compile_mixed_moe_gemm2(
             model_dim=model_dim,
             inter_dim=inter_dim,
@@ -1307,7 +1336,7 @@ def run_moe_stage2(
                     tokens,
                     model_dim,
                     inter_dim,
-                    int(blocks),
+                    stage2_m_blocks,
                     torch.cuda.current_stream(),
                 )
 
@@ -1349,7 +1378,7 @@ def run_moe_stage2(
                     tokens,
                     model_dim,
                     inter_dim,
-                    int(blocks),
+                    stage2_m_blocks,
                     torch.cuda.current_stream(),
                 )
 
