@@ -695,8 +695,10 @@ def scan_measured_attempt_tokens_present_at_commit(
     return offenders
 
 
-def scan_win_label_backed_by_claimable(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
-    """Find active ``result:"win"`` rows not backed by a claimable-win marker.
+def scan_win_label_backed_by_claimable(
+    path: str = ATTEMPTS_JSONL, baseline_csv: str = None, repo_root: str = _REPO_ROOT
+) -> List[Tuple]:
+    """Find active ``result:"win"`` rows not backed by a real claimable-win verdict.
 
     ``result:"win"`` is the strongest label and must mean a promotable win that
     passed the full comparator (``compare_csvs(...).claimable_win``): full-grid
@@ -704,14 +706,25 @@ def scan_win_label_backed_by_claimable(path: str = ATTEMPTS_JSONL) -> List[Tuple
     ``selected_candidate_gate``.  A subset-clean candidate (e.g. a single
     large-bucket MFU improvement measured with ``--no-e2e``) is NOT a win and must
     be recorded as ``result:"neutral"`` with a "subset candidate, not claimable"
-    note.  To make the strong label self-certifying, an active ``result:"win"``
-    row MUST carry ``config.claimable == True`` (set only by a promotion run that
-    verified ``claimable_win``).  This scan flags any active ``win`` row lacking
-    that marker, so subset evidence can never silently masquerade as a claimable
-    win.  Returns ``(timestamp, model, reason)`` per offender (empty == clean).
+    note.
+
+    Two independent gates, BOTH required (a hand-written marker can never bypass
+    the official comparator):
+
+    1. The row MUST carry ``config.claimable == True`` (the promotion-path marker).
+    2. The row's ``csv_path`` MUST actually satisfy
+       ``compare_csvs(baseline, csv_path).claimable_win`` -- recomputed here from
+       the recorded CSV, so a marker set on a non-claimable CSV is still flagged.
+
+    ``baseline_csv`` defaults to the committed locked baseline.  If the candidate
+    CSV or the baseline cannot be read, the recompute is skipped (the marker gate
+    still applies) so the scan never false-flags on a missing artifact.  Returns
+    ``(timestamp, model, reason)`` per offender (empty == clean).
     """
     if not os.path.exists(path):
         return []
+    if baseline_csv is None:
+        baseline_csv = os.path.join(repo_root, "docs", "baseline_523ca1c7_validated.csv")
     offenders: List[Tuple] = []
     with open(path) as f:
         for ln in f:
@@ -725,6 +738,24 @@ def scan_win_label_backed_by_claimable(path: str = ATTEMPTS_JSONL) -> List[Tuple
                 offenders.append(
                     (rec.get("timestamp"), rec.get("model"), "win row missing config.claimable=True backing")
                 )
+                continue
+            # Marker is set: independently recompute the official comparator verdict
+            # for the recorded CSV.  A marker on a non-claimable CSV is still a defect.
+            cand = rec.get("csv_path") or ""
+            cand_abs = cand if os.path.isabs(cand) else os.path.join(repo_root, cand)
+            if not cand or not os.path.exists(cand_abs) or not os.path.exists(baseline_csv):
+                continue  # cannot recompute -> marker gate already passed; do not false-flag
+            try:
+                if not compare_csvs(baseline_csv, cand_abs).claimable_win:
+                    offenders.append(
+                        (
+                            rec.get("timestamp"),
+                            rec.get("model"),
+                            "config.claimable=True but compare_csvs(...).claimable_win is False for csv_path",
+                        )
+                    )
+            except Exception:
+                continue  # unreadable/ill-formed CSV -> do not false-flag on the recompute
     return offenders
 
 

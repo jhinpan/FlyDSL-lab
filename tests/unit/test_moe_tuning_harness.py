@@ -997,6 +997,67 @@ def test_scan_win_label_backed_by_claimable(tmp_path):
     assert ledger.scan_win_label_backed_by_claimable(path) == []
 
 
+def test_scan_win_label_recomputes_comparator(tmp_path):
+    """A win row with config.claimable=True but a NON-claimable csv_path is still flagged:
+    the marker can never bypass the recomputed compare_csvs verdict."""
+    import csv as _c
+    import json as _json
+
+    cols = [
+        "model",
+        "dtype",
+        "act",
+        "token",
+        "kernel_path_us",
+        "e2e_us",
+        "mfu",
+        "aot_status",
+        "correctness_pass",
+        "logits_diff",
+    ]
+    baseline = str(tmp_path / "baseline.csv")
+    cand = str(tmp_path / "cand.csv")
+
+    def _write(p, rows):
+        with open(p, "w", newline="") as f:
+            w = _c.DictWriter(f, fieldnames=cols)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+
+    # Baseline has one large-bucket point; candidate covers it but with NO e2e/AOT
+    # fields and worse metrics -> compare_csvs.claimable_win is False.
+    base_row = dict(
+        model="gpt_oss", dtype="a4w4", act="swiglu", token=16384, kernel_path_us=2900, e2e_us=2000, mfu=0.28
+    )
+    cand_row = dict(
+        model="gpt_oss",
+        dtype="a4w4",
+        act="swiglu",
+        token=16384,
+        kernel_path_us=2950,
+        e2e_us="",
+        mfu=0.27,
+        aot_status="",
+        correctness_pass="",
+        logits_diff="",
+    )
+    _write(baseline, [base_row])
+    _write(cand, [cand_row])
+
+    path = str(tmp_path / "attempts.jsonl")
+    rec = {
+        "result": "win",
+        "model": "gpt_oss",
+        "config": {"claimable": True},
+        "csv_path": cand,
+        "timestamp": 9.0,
+    }
+    open(path, "w").write(_json.dumps(rec) + "\n")
+    off = ledger.scan_win_label_backed_by_claimable(path, baseline_csv=baseline, repo_root=str(tmp_path))
+    assert off and off[0][0] == 9.0 and "claimable_win is False" in off[0][2]
+
+
 def test_committed_win_labels_backed_by_claimable():
     """No active committed result:win row may exist without a claimable-win backing."""
     attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
