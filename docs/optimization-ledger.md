@@ -82,7 +82,8 @@ locked baseline, more-negative = faster):
 | stage2 persist_m2 {1,2,4,8,16} (legacy mode) | −2.95% / −1.53% (pm2=1) | −3.3% / −2.2% (pm2=1) | <10% | R14–R16 |
 | stage2 persist_m2=0 (persistent-CU mode) | −1.45% / −1.53% | −1.14% / −0.26% | <10% | R21 |
 | stage2 tile_m2=32 (decoupled, sort_block_m=64) | −3.84% / −1.92% | −2.0% / −2.9% | <10% | R20 |
-| stage2 LDS load-width=8 (2x dwordx2 vs 1x dwordx4) — first DEEPER profile-backed lever | −0.11% / +0.99% | +0.17% / +0.34% | <10% | R22 |
+| stage2 LDS load-width=8 (2x dwordx2 vs 1x dwordx4) — first DEEPER lever | −0.11% / +0.99% | +0.17% / +0.34% | <10% | R22 |
+| stage2 A-prefetch schedule=early (DS-reads-ahead-of-MFMA hint) — second DEEPER lever | −0.06% / −0.39% | −0.34% / +0.19% | <10% | R23 |
 
 Scope notes (precise, not over-broad):
 - `tile_m2` was measured on the R20 candidate path with stage1 `tile_m1=64`, which
@@ -99,17 +100,27 @@ the single 16B (dwordx4) LDS A-load into two contiguous 8B (dwordx2) loads at th
 same XOR16 coords (byte-identical data; correctness preserved). It is neutral /
 slightly worse (kp within ±1% of baseline; stage2 +0.2..+1.1%): two narrower LDS
 loads add instruction overhead without reducing the LDS-wait stall, so this
-particular LDS-load-shape change is not the right deeper lever. The profile's
-LDS-wait bottleneck likely needs a pipeline/scheduling change (deeper ping-pong,
-prefetch restructuring), not a load-width change.
+particular LDS-load-shape change is not the right deeper lever.
+
+R23 — second deeper stage2 lever (NEGATIVE): `stage2_a_prefetch_schedule=early`
+emits a `sched_dsrd(2)+sched_mfma(1)` in-loop group-barrier hint biasing the A
+LDS-reads ahead of MFMA (the A-prefetch data is already hoisted, so only the
+instruction schedule changes; correctness preserved). It is neutral (kp within
+±0.4%: DS V3 −0.06/−0.39%, Kimi −0.34/+0.19%; stage2 −0.67..+0.10%) — a tiny
+consistent DS V3 nudge, far below the gate. CONCLUSION across R22+R23: the
+small-token stage2 LDS-wait stall is NOT addressable by A-prefetch load-shape or
+in-loop scheduling alone; breaking it would require a larger pipeline/occupancy
+restructuring (deeper multi-buffer pipeline, `use_async_copy`, or split-K), which
+is a substantially bigger change than a single knob.
 
 STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win on the
-measured surface (now including the first deeper LDS-load lever). AC-4 is NOT
-closed-as-infeasible — the remaining deeper levers (stage2 pipeline/prefetch
-restructuring, `use_async_copy`, split-K) are the next candidates. All
-measurements are replayable (committed HEAD, live idle, reps=3); see
-`docs/loop2_models/*_a4w4_small_*` and the `stage2 lds_load_bytes` / `tile_m2` /
-`persist_m` / `tile_n2` loss rows in `docs/attempts.jsonl`.
+measured surface (now including two deeper stage2 levers). AC-4 is NOT
+closed-as-infeasible — the remaining deeper levers (larger stage2 pipeline
+restructuring, `use_async_copy`, split-K) are the next candidates, each a larger
+change than the single-knob levers tried so far. All measurements are replayable
+(committed HEAD, live idle, reps=3); see `docs/loop2_models/*_a4w4_small_*` and
+the `stage2 a_prefetch_schedule` / `lds_load_bytes` / `tile_m2` / `persist_m` /
+`tile_n2` loss rows in `docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 
