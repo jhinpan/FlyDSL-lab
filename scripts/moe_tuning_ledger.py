@@ -847,9 +847,47 @@ def scan_win_label_backed_by_claimable(
     return offenders
 
 
+LOCKED_BASELINE_COMMIT = "523ca1c7e224ee62d5e3a4c0f52a18b9cec5e727"
+
+
+def scan_candidate_csv_freshness(
+    candidate_csv: str,
+    baseline_commit: str = LOCKED_BASELINE_COMMIT,
+    win_tokens: Optional[List[str]] = None,
+) -> List[Tuple]:
+    """Reject a candidate CSV that reuses locked-baseline rows as candidate rows.
+
+    A claimable-win candidate must be FRESHLY measured from the final branch state
+    (AC-5): every row's ``commit`` must NOT be the locked baseline commit.  The
+    previous loop built a "full-40" candidate by copying 37 byte-for-byte rows from
+    ``docs/baseline_523ca1c7_validated.csv`` (commit ``523ca1c7...``) and measuring
+    only the GPT-OSS large rows; ``compare_csvs`` happily returned ``claimable_win``
+    because it does not inspect provenance.  This scan closes that hole: any
+    candidate row still carrying the baseline commit is an offender.
+
+    Returns a list of ``(model, dtype, act, token, reason)`` offenders; empty == OK.
+    ``win_tokens`` is unused by the freshness check itself but documents that the
+    win rows in particular must be fresh.
+    """
+    offenders: List[Tuple] = []
+    short_base = (baseline_commit or "")[:12]
+    if not os.path.exists(candidate_csv):
+        return [("", "", "", "", f"candidate_csv missing: {candidate_csv}")]
+    with open(candidate_csv, newline="") as f:
+        for row in csv.DictReader(f):
+            commit = (row.get("commit") or "").strip()
+            key = (row.get("model"), row.get("dtype"), row.get("act"), row.get("token"))
+            if commit == baseline_commit or (short_base and commit[:12] == short_base):
+                offenders.append((*key, f"row carries locked-baseline commit {short_base} (copied baseline row, not a fresh measurement)"))
+            elif not commit:
+                offenders.append((*key, "row has empty commit (no provenance)"))
+    return offenders
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
+    "LOCKED_BASELINE_COMMIT",
     "REQUIRED_ATTEMPT_FIELDS",
     "Attempt",
     "append_attempt",
@@ -865,6 +903,7 @@ __all__ = [
     "scan_measured_attempt_tokens_present_at_commit",
     "scan_win_label_backed_by_claimable",
     "scan_no_self_contradictory_active_rejection",
+    "scan_candidate_csv_freshness",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
