@@ -68,34 +68,38 @@ file is the human-facing running log.
 
 <!-- Newest first.  Each entry mirrors an attempts.jsonl record. -->
 
-### AC-4 small-token (tokens 32/64) — lightweight-surface VERDICT: INFEASIBLE for DS V3 + Kimi K2
+### AC-4 small-token (tokens 32/64) — lightweight-lever results so far (DS V3 + Kimi K2) — AC-4 STILL ACTIVE
 
-Every legal lightweight stage1/stage2 tile + launch lever has now been measured
-for the small-token regime (DS V3 and Kimi K2 a4w4, tokens 32/64); none clears the
-DEC-1 10% small-token kernel-path gate. Best result per lever (kernel-path Δ vs
-the locked baseline, more-negative = faster):
+The lightweight stage1/stage2 tile + launch-mapping levers measured so far for the
+small-token regime (DS V3 and Kimi K2 a4w4, tokens 32/64) are all below the DEC-1
+10% small-token kernel-path gate. Best result per lever (kernel-path Δ vs the
+locked baseline, more-negative = faster):
 
-| lever | DS V3 best (t32/t64) | Kimi K2 best (t32/t64) | gate |
-|---|---|---|---|
-| stage1 tile (tile_m1/n1/k1) | measured/rejected, no win | (skinny shape identical) | <10% |
-| stage2 tile_n2 | −2.2% / −2.8% (n2=448) | −2.2% / −2.8% (n2=448) | <10% |
-| stage2 persist_m2 | −2.95% / −1.53% (pm2=1) | −3.3% / −2.2% (pm2=1) | <10% |
-| stage2 tile_m2 (decoupled) | −3.84% / −1.92% (tm2=32) | −2.0% / −2.9% (tm2=32) | <10% |
+| lever (values measured) | DS V3 best (t32/t64) | Kimi K2 best (t32/t64) | gate | round |
+|---|---|---|---|---|
+| stage1 tile (tile_m1/n1/k1) | measured/rejected, no win | (skinny shape identical) | <10% | R2–R5 |
+| stage2 tile_n2 {64,128,256,448,512,896,1024} | −2.2% / −2.8% (n2=448) | −2.2% / −2.8% (n2=448) | <10% | R10–R12,R16 |
+| stage2 persist_m2 {1,2,4,8,16} (legacy mode) | −2.95% / −1.53% (pm2=1) | −3.3% / −2.2% (pm2=1) | <10% | R14–R16 |
+| stage2 persist_m2=0 (persistent-CU mode) | −1.45% / −1.53% | −1.14% / −0.26% | <10% | R21 |
+| stage2 tile_m2=32 (decoupled, sort_block_m=64) | −3.84% / −1.92% | −2.0% / −2.9% | <10% | R20 |
 
-The legal lightweight small-token search space is exhausted: stage2 `tile_n2 ∈
-{64,128,256,448,512,896,1024}` (R10–R12), `persist_m2 ∈ {1,2,4,8,16}` (R14/R15/R16),
-`tile_m2 ∈ {32,64}` (R20; 96+ are illegal via `sort_block_m_not_mult_tile_m`), and
-the stage1 tile space (R2–R5). All are below-gate. GPT-OSS has no tokens<=64
-regime, so AC-4 does not apply to it.
+Scope notes (precise, not over-broad):
+- `tile_m2` was measured on the R20 candidate path with stage1 `tile_m1=64`, which
+  ties `sort_block_m=64`; on THAT path `tile_m2 ∈ {32,64}` are the legal values
+  (96+ fail `sort_block_m_not_mult_tile_m`). This is a property of the measured
+  path, NOT a general stage2 legality statement — the legality API accepts larger
+  `tile_m` when `sort_block_m` matches.
+- "Every lightweight lever measured" is NOT claimed: this is the set measured to
+  date. Deeper levers (`use_async_copy`, split-K, stage2 pipeline/LDS) are part of
+  the in-scope plan and are NOT yet measured.
 
-VERDICT: AC-4 (small-token win) is **not achievable on the lightweight tuning
-surface** (the tile + launch-mapping parameters of `compile_mixed_moe_gemm1/2`).
-A small-token win, if one exists, requires a deeper kernel change (e.g.
-`use_async_copy`, split-K, or a pipeline/LDS restructuring) that is outside the
-tile/launch search space — promoted to a tracked future lever, not a silent drop.
-All measurements are replayable (committed HEAD, live idle, reps=3); see
-`docs/loop2_models/*_a4w4_small_*` and the `stage2 tile_m2` / `persist_m` / `tile_n2`
-loss rows in `docs/attempts.jsonl`.
+STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win exists on the
+measured lightweight surface, but AC-4 is NOT closed-as-infeasible — the
+profile-backed deeper stage2 LDS/pipeline lever (the accepted profile says small
+tokens are stage2 LDS/pipeline limited) is the next small-token lever to thread
+and measure before any AC-4 conclusion. All measurements are replayable (committed
+HEAD, live idle, reps=3); see `docs/loop2_models/*_a4w4_small_*` and the
+`stage2 tile_m2` / `persist_m` / `tile_n2` loss rows in `docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 
