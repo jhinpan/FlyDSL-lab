@@ -66,3 +66,4 @@ docs/_build/
 python/flydsl/_mlir
 
 .humanize*
+.rocprofv3/
