@@ -84,7 +84,7 @@ locked baseline, more-negative = faster):
 | stage2 tile_m2=32 (decoupled, sort_block_m=64) | −3.84% / −1.92% | −2.0% / −2.9% | <10% | R20 |
 | stage2 LDS load-width=8 (2x dwordx2 vs 1x dwordx4) — first DEEPER lever | −0.11% / +0.99% | +0.17% / +0.34% | <10% | R22 |
 | stage2 A-prefetch schedule=early (DS-reads-ahead-of-MFMA hint) — second DEEPER lever | −0.06% / −0.39% | −0.34% / +0.19% | <10% | R23 |
-| stage2 A-prefetch scope=all_m (hoist ALL packed-M A LDS reads up-front) — third DEEPER lever | −0.22% / +0.69% | +0.57% / −0.19% | <10% | R24 |
+| stage2 A-prefetch scope=all_m (hoist ALL packed-M A LDS reads) — CLEAN, front loads None-guarded | +0.00% / +0.74% | +0.17% / +0.34% | <10% | R25 (R24 probe was unclean) |
 
 Scope notes (precise, not over-broad):
 - `tile_m2` was measured on the R20 candidate path with stage1 `tile_m1=64`, which
@@ -113,19 +113,26 @@ A-prefetch data-hoist. It is neutral (kp within ±0.4%: DS V3 −0.06/−0.39%, 
 −0.34/+0.19%; stage2 −0.67..+0.10%) — far below the gate. So the *scheduler-hint*
 on the front-pack prefetch is not the fix.
 
-R24 — stage2 full-M A-prefetch DATA-HOIST (NEGATIVE): `stage2_a_prefetch_scope=all_m`
-hoists EVERY `(k_idx, mi_idx)` A LDS pack to the top of `compute_tile` (not just
-the `mi_idx==0` front packs) — same loads, issued up-front; correctness preserved
-(durable strict-ref smoke recorded). It is neutral (kp within ±0.7%: DS V3
-−0.22/+0.69%, Kimi +0.57/−0.19%; stage2 −0.5..+1.1%) — no win. The compiler
-already schedules the front-pack prefetch well, and the residual stall is the
-LDS-wait *latency* itself, not A-load issue position.
+R24 — stage2 full-M A-prefetch DATA-HOIST (NEGATIVE, but the R24 probe was
+UNCLEAN; superseded by R25): `stage2_a_prefetch_scope=all_m` hoists EVERY
+`(k_idx, mi_idx)` A LDS pack to the top of `compute_tile`. CAVEAT (Codex R24
+review): the R24 code still emitted the 4 old front-pack cross-tile prefetches and
+passed them into `compute_tile`, which ignored them under all_m — so R24 measured
+"full hoist PLUS redundant ignored front loads", not a clean experiment. The R24
+all_m attempt rows are SUPERSEDED by the R25 clean re-measurement.
 
-CONCLUSION (R22+R23+R24): the entire stage2 A-prefetch surface — load-shape (R22),
-in-loop scheduling (R23), and full-M data-hoist (R24) — is exhausted below-gate
-for small tokens. Breaking the LDS-wait stall requires a LARGER restructuring
-(deeper multi-buffer stage2 pipeline, `use_async_copy`, or split-K), each a
-multi-round kernel rewrite.
+R25 — CLEAN full-M A-prefetch data-hoist (NEGATIVE): the 4 front-pack prefetch
+sites are now `None`-guarded under all_m, so the kernel issues exactly the
+hoisted full-M A LDS loads and NO redundant front loads (durable strict-ref smoke
+recorded). It is neutral (kp +0.0..+0.7%: DS V3 +0.00/+0.74%, Kimi +0.17/+0.34%;
+stage2 +0.0..+1.5%) — no win, confirming R24's direction on a clean experiment.
+The residual stall is the LDS-wait *latency* itself, not A-load issue position.
+
+CONCLUSION (R22+R23+R25): the stage2 A-prefetch surface — load-shape (R22),
+in-loop scheduling (R23), and CLEAN full-M data-hoist (R25) — is measured
+below-gate for small tokens. Breaking the LDS-wait stall requires a LARGER
+restructuring (deeper multi-buffer stage2 pipeline, `use_async_copy`, or split-K),
+each a multi-round kernel rewrite.
 
 STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win on the
 measured surface. The stage2 A-prefetch surface is now exhausted; only larger
