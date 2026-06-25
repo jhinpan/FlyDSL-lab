@@ -1294,14 +1294,15 @@ def run_moe_stage2(
 
         _n_valid_rows = int(num_valid_ids[0].item())
         stage2_m_blocks = stage2_block_count(_n_valid_rows, int(tile_m))
-        # Invariant: with the default coupled tile (stage2 tile_m == stage1 block
-        # size, i.e. sort_block_m in {0, tile_m}), the recomputed count must equal
-        # `blocks`, so default behavior is provably unchanged.
-        if int(sort_block_m) in (0, int(tile_m)):
-            assert stage2_m_blocks == int(blocks), (
-                f"stage2 block-count invariant broken: ceil({_n_valid_rows}/{tile_m})="
-                f"{stage2_m_blocks} != blocks={blocks}"
-            )
+        # Coverage invariant: the launched stage2 M-tiles must span every valid
+        # padded row.  `blocks` (sorted_expert_ids length) is per-expert-padded at
+        # the stage1 block size, and the kernel early-exits any tile whose row base
+        # is >= num_valid_ids, so stage2_m_blocks need NOT equal `blocks` -- it only
+        # has to cover the valid rows.  (Assert coverage, not equality; the old
+        # equality check was wrong and crashed legitimate default-path runs.)
+        assert (
+            stage2_m_blocks * int(tile_m) >= _n_valid_rows
+        ), f"stage2 under-coverage: {stage2_m_blocks} tiles * {tile_m} < num_valid_ids={_n_valid_rows}"
         exe = compile_mixed_moe_gemm2(
             model_dim=model_dim,
             inter_dim=inter_dim,

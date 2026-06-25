@@ -23,17 +23,18 @@ from kernels.moe_tuning import (
 pytestmark = pytest.mark.l0_backend_agnostic
 
 
-def test_stage2_block_count_decoupled_and_default_invariant():
-    # Decoupled stage2 tile (tile_m2 < tile_m1): more M-tiles than the routing
-    # block count, so reusing the stage1 block count would under-launch.
-    # Padded rows = blocks_at_tile_m1 * tile_m1.
-    tile_m1, tile_m2 = 256, 64
-    blocks_at_m1 = 5
-    num_valid_rows = blocks_at_m1 * tile_m1  # 1280
-    # default coupled: stage2 tile == stage1 block size -> equals routing blocks.
-    assert stage2_block_count(num_valid_rows, tile_m1) == blocks_at_m1
-    # decoupled: 4x as many 64-row tiles cover the same 1280 padded rows.
-    assert stage2_block_count(num_valid_rows, tile_m2) == blocks_at_m1 * (tile_m1 // tile_m2)
+def test_stage2_block_count_covers_valid_rows():
+    # stage2_block_count returns the number of stage2 M-tiles needed to COVER the
+    # valid padded rows = ceil(num_valid_rows / tile_m).  It is NOT tied to the
+    # stage1 routing block count; smaller stage2 tiles just need proportionally
+    # more tiles to span the same rows.
+    num_valid_rows = 1280
+    assert stage2_block_count(num_valid_rows, 256) == 5  # ceil(1280/256)
+    assert stage2_block_count(num_valid_rows, 64) == 20  # ceil(1280/64)
+    # coverage holds: tiles * tile_m >= num_valid_rows for every case.
+    for tm in (32, 64, 128, 256):
+        n = stage2_block_count(num_valid_rows, tm)
+        assert n * tm >= num_valid_rows and (n - 1) * tm < num_valid_rows
     # ceil behavior on a non-multiple extent.
     assert stage2_block_count(130, 64) == 3
     assert stage2_block_count(0, 64) == 0

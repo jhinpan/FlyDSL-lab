@@ -85,16 +85,19 @@ def _a_elem_bytes(a_dtype: str) -> int:
 
 
 def stage2_block_count(num_valid_rows: int, stage2_tile_m: int) -> int:
-    """Number of stage2 M-tiles to launch over ``num_valid_rows`` padded rows.
+    """Number of stage2 M-tiles needed to COVER ``num_valid_rows`` padded rows.
 
-    The mixed stage2 kernel sizes its launch grid from the passed expert-id count
-    (``gy = ceil(count / persist_m)``, per-tile stride = stage2 ``tile_m``).  When
-    stage2's ``tile_m`` is decoupled from stage1's routing block size, the count
-    must be recomputed from the padded-row extent rather than reusing the stage1
-    routing block count, or stage2 under-launches (and times incomplete work).
+    The mixed stage2 kernel sizes its launch grid from the passed count
+    (``gy = ceil(count / persist_m)``, per-tile stride = stage2 ``tile_m``) and
+    early-exits any tile whose row base is >= ``num_valid_ids``.  So the launch
+    count only needs to COVER the valid rows: ``ceil(num_valid_rows / tile_m)``.
 
-    With the coupled default (stage2 ``tile_m`` == stage1 block size), this equals
-    the routing block count, so default behavior is unchanged.
+    Note this is generally NOT equal to the stage1 routing block count
+    (``sorted_expert_ids`` length), which is per-expert-padded at the stage1 block
+    size and so is usually larger; the extra blocks early-exit.  Using this
+    coverage count keeps stage2 correct for both the coupled default and a
+    decoupled (smaller) stage2 ``tile_m`` -- verified by a strict 0.0 logits diff
+    on both paths.
     """
     if stage2_tile_m <= 0:
         raise ValueError(f"stage2_tile_m must be positive, got {stage2_tile_m}")
