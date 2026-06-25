@@ -1021,6 +1021,33 @@ def scan_win_label_backed_by_claimable(
             if not os.path.exists(cand_abs):
                 offenders.append((ts, model, f"config.claimable=True but candidate csv_path does not exist: {cand}"))
                 continue
+            cfg = rec.get("config") or {}
+            # A dispatch-only change is validated by compare_csvs_dispatch_change
+            # against the recorded FRESH PAIRED baseline (not the locked snapshot),
+            # because identical-config unchanged rows drift cross-session and the
+            # locked baseline is invalid as their numeric denominator.
+            if cfg.get("verdict") == "dispatch_change":
+                ev = rec.get("evidence") or {}
+                base_rel = ev.get("baseline_csv") or rec.get("baseline_csv") or ""
+                base_abs = base_rel if os.path.isabs(base_rel) else os.path.join(repo_root, base_rel)
+                changed = {tuple(k) for k in ev.get("changed_keys") or []}
+                quar = {tuple(k) for k in ev.get("quarantine_keys") or []}
+                if not base_rel or not os.path.exists(base_abs):
+                    offenders.append((ts, model, f"dispatch_change win but fresh paired baseline missing: {base_rel}"))
+                    continue
+                if not changed:
+                    offenders.append((ts, model, "dispatch_change win but evidence.changed_keys missing"))
+                    continue
+                try:
+                    ok = compare_csvs_dispatch_change(
+                        base_abs, cand_abs, changed_keys=changed, quarantine_keys=quar
+                    ).claimable_dispatch_win
+                except Exception as e:
+                    offenders.append((ts, model, f"dispatch_change recompute raised: {e!r}"))
+                    continue
+                if not ok:
+                    offenders.append((ts, model, "dispatch_change win but claimable_dispatch_win recomputes False"))
+                continue
             if not os.path.exists(baseline_csv):
                 offenders.append((ts, model, f"config.claimable=True but baseline CSV does not exist: {baseline_csv}"))
                 continue
