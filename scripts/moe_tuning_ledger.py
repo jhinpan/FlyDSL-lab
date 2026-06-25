@@ -562,6 +562,23 @@ _LEGALITY_REASON_TOKENS = (
 _LEGALITY_FILTER_FILE = "kernels/moe_tuning.py"
 
 
+def _git_file_at_commit(commit: str, repo_path: str, repo_root: str) -> Optional[str]:
+    """Return the text of ``repo_path`` at ``commit`` (None if it cannot be read).
+
+    None means "cannot resolve" (no git / path absent at the commit) and callers
+    treat it as not-an-offender so the scan never false-flags on a missing toolchain.
+    """
+    try:
+        r = _subprocess.run(
+            ["git", "-C", repo_root, "show", f"{commit}:{repo_path}"],
+            capture_output=True,
+            text=True,
+        )
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
 def scan_rejection_reason_present_at_commit(path: str = ATTEMPTS_JSONL, repo_root: str = _REPO_ROOT) -> List[Tuple]:
     """Find active legality rejections whose recorded commit lacks the cited guard.
 
@@ -580,17 +597,6 @@ def scan_rejection_reason_present_at_commit(path: str = ATTEMPTS_JSONL, repo_roo
     if not os.path.exists(path):
         return []
 
-    def _file_at(commit: str) -> Optional[str]:
-        try:
-            r = _subprocess.run(
-                ["git", "-C", repo_root, "show", f"{commit}:{_LEGALITY_FILTER_FILE}"],
-                capture_output=True,
-                text=True,
-            )
-            return r.stdout if r.returncode == 0 else None
-        except Exception:
-            return None  # cannot check (no git) -> do not flag
-
     offenders: List[Tuple] = []
     with open(path) as f:
         for ln in f:
@@ -605,12 +611,87 @@ def scan_rejection_reason_present_at_commit(path: str = ATTEMPTS_JSONL, repo_roo
             tokens = [t for t in _LEGALITY_REASON_TOKENS if t in reason]
             if not commit or not tokens:
                 continue
-            src = _file_at(commit)
+            src = _git_file_at_commit(commit, _LEGALITY_FILTER_FILE, repo_root)
             if src is None:
                 continue  # cannot resolve the file at that commit -> do not flag
             for tok in tokens:
                 if tok not in src:
                     offenders.append((rec.get("timestamp"), tok))
+    return offenders
+
+
+# Tunable-knob CLI/source tokens that a measured attempt's command may exercise,
+# each mapped to the repo file(s) whose content at the recorded commit must
+# contain the token.  A measured attempt whose command cites one of these must
+# record a commit where the harness AND the kernel test actually implement it --
+# otherwise the measurement was run from uncommitted code and is not replayable.
+# Used by scan_measured_attempt_tokens_present_at_commit.  Add new tunable knobs
+# here as they are threaded.
+_MEASURED_KNOB_TOKENS = {
+    "persist-m1": ("scripts/moe_tuning_harness.py",),
+    "persist-m2": ("scripts/moe_tuning_harness.py",),
+    "xcd-swizzle1": ("scripts/moe_tuning_harness.py",),
+    "xcd-swizzle2": ("scripts/moe_tuning_harness.py",),
+    "persist_m1": ("tests/kernels/test_moe_gemm.py",),
+    "persist_m2": ("tests/kernels/test_moe_gemm.py",),
+    "xcd_swizzle1": ("tests/kernels/test_moe_gemm.py",),
+    "xcd_swizzle2": ("tests/kernels/test_moe_gemm.py",),
+}
+_MEASURED_RESULTS = ("win", "loss", "neutral")
+
+
+def scan_measured_attempt_tokens_present_at_commit(
+    path: str = ATTEMPTS_JSONL, repo_root: str = _REPO_ROOT
+) -> List[Tuple]:
+    """Find active measured attempts run from code absent at their recorded commit.
+
+    A measured attempt (``win``/``loss``/``neutral``) whose ``command`` exercises a
+    tunable knob (e.g. ``--persist-m2``) is only replayable if the file that
+    implements that knob CONTAINS the token at the recorded commit.  The R14 defect
+    class: the sweeps were run from an uncommitted working tree while provenance
+    still pointed at the prior commit, so the recorded commit lacked the
+    knob-threading code.  ``scan_attempt_command_paths`` does not catch this (the
+    script path exists at the commit; only its *content* is stale).  For every
+    active measured attempt, this checks each knob token present in the ``command``
+    (or in the ``config``) against the mapped file at the recorded commit.  Returns
+    ``(timestamp, token)`` per offender (empty == clean).
+    """
+    if not os.path.exists(path):
+        return []
+
+    src_cache: Dict[Tuple[str, str], Optional[str]] = {}
+
+    def _src(commit: str, repo_path: str) -> Optional[str]:
+        key = (commit, repo_path)
+        if key not in src_cache:
+            src_cache[key] = _git_file_at_commit(commit, repo_path, repo_root)
+        return src_cache[key]
+
+    offenders: List[Tuple] = []
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if rec.get("result") not in _MEASURED_RESULTS or "superseded_by" in rec:
+                continue
+            commit = rec.get("commit") or ""
+            if not commit:
+                continue
+            command = rec.get("command") or ""
+            cfg_keys = set((rec.get("config") or {}).keys())
+            for tok, files in _MEASURED_KNOB_TOKENS.items():
+                cited = (f"--{tok}" in command) or (tok in command) or (tok in cfg_keys)
+                if not cited:
+                    continue
+                for repo_path in files:
+                    src = _src(commit, repo_path)
+                    if src is None:
+                        continue  # cannot resolve -> do not flag
+                    if tok not in src:
+                        offenders.append((rec.get("timestamp"), tok))
+                        break  # one offense per (record, token) is enough
     return offenders
 
 
@@ -629,6 +710,7 @@ __all__ = [
     "scan_superseded_rejected_candidates",
     "scan_attempt_command_paths",
     "scan_rejection_reason_present_at_commit",
+    "scan_measured_attempt_tokens_present_at_commit",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",

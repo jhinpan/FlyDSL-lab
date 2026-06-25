@@ -905,6 +905,70 @@ def test_committed_rejection_reasons_present_at_commit():
     assert off == [], f"active legality rejections whose recorded commit lacks the cited guard: {off}"
 
 
+def test_scan_measured_attempt_tokens_present_at_commit(tmp_path):
+    import json as _json
+    import subprocess as _sp
+
+    # Build a tiny git repo whose harness gains the --persist-m2 knob token only in
+    # the SECOND commit; a measured attempt whose command exercises that knob must
+    # record the second commit, not the first.
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "tests" / "kernels").mkdir(parents=True)
+    _sp.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    _sp.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    _sp.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    harness_file = repo / "scripts" / "moe_tuning_harness.py"
+    test_file = repo / "tests" / "kernels" / "test_moe_gemm.py"
+    harness_file.write_text("# harness without the knob\n")
+    test_file.write_text("# test without the knob\n")
+    _sp.run(["git", "-C", str(repo), "add", "."], check=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-q", "-m", "pre-knob"], check=True)
+    pre = _sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    harness_file.write_text('ap.add_argument("--persist-m2")\n')
+    test_file.write_text('parser.add_argument("--persist_m2")\n')
+    _sp.run(["git", "-C", str(repo), "add", "."], check=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-q", "-m", "add knob"], check=True)
+    post = _sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    path = str(tmp_path / "attempts.jsonl")
+
+    def _rec(commit, ts):
+        return {
+            "result": "loss",
+            "model": "deepseek_v3",
+            "dtype": "a4w4",
+            "act": "silu",
+            "token": 32,
+            "config": {"persist_m2": 2},
+            "command": "python3 scripts/moe_tuning_harness.py candidate --persist-m2 2 ...",
+            "commit": commit,
+            "timestamp": ts,
+        }
+
+    # Clean: the knob token exists at the recorded (post) commit.
+    open(path, "w").write(_json.dumps(_rec(post, 2.0)) + "\n")
+    assert ledger.scan_measured_attempt_tokens_present_at_commit(path, repo_root=str(repo)) == []
+    # Dirty: the recorded (pre) commit predates the knob -> flagged.
+    open(path, "w").write(_json.dumps(_rec(pre, 1.0)) + "\n")
+    off = ledger.scan_measured_attempt_tokens_present_at_commit(path, repo_root=str(repo))
+    assert off and any(ts == 1.0 for ts, _tok in off)
+    # A superseded dirty record is not flagged.
+    rec = _rec(pre, 1.0)
+    rec["superseded_by"] = 2.0
+    open(path, "w").write(_json.dumps(rec) + "\n")
+    assert ledger.scan_measured_attempt_tokens_present_at_commit(path, repo_root=str(repo)) == []
+
+
+def test_committed_measured_attempt_tokens_present_at_commit():
+    """Active committed measured attempts must record a commit that contains the knob tokens they exercise."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    off = ledger.scan_measured_attempt_tokens_present_at_commit(attempts)
+    assert off == [], f"measured attempts whose recorded commit lacks a cited knob token: {off}"
+
+
 def test_row_missing_kernel_path():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
