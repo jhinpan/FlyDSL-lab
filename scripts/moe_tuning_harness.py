@@ -100,6 +100,9 @@ CSV_COLUMNS = [
     "strict_error",
     "error_category",
     "aot_status",
+    # fail-closed no-fallback enforcement: the exact stage2 kernelName2 the strict
+    # run was REQUIRED to resolve (empty = not enforced for this row).
+    "expected_kernel_name2",
 ]
 
 METRIC_FORMULA = (
@@ -217,6 +220,7 @@ class PointRow:
     strict_error: str = ""
     error_category: str = ""
     aot_status: str = ""
+    expected_kernel_name2: str = ""
 
     def to_csv_dict(self) -> dict:
         p = self.provenance
@@ -273,6 +277,7 @@ class PointRow:
             "strict_error",
             "error_category",
             "aot_status",
+            "expected_kernel_name2",
         ):
             row[k] = getattr(self, k)
         return row
@@ -858,7 +863,7 @@ AITER_REPO = "/sgl-workspace/aiter"
 DTYPE_ALIAS_TO_GATE = {"a4w4": "separated", "a8w4": "interleave"}
 
 
-def _aiter_cmd(rp: RunPoint, check_aot: bool = True) -> List[str]:
+def _aiter_cmd(rp: RunPoint, check_aot: bool = True, expect_kernel_name2: str = "") -> List[str]:
     """Strict, AOT-checked, model-correct single-case aiter guardrail command.
 
     Invokes ``scripts/aiter_strict_point.py`` which calls aiter ``test_fmoe`` with
@@ -900,6 +905,12 @@ def _aiter_cmd(rp: RunPoint, check_aot: bool = True) -> List[str]:
     ]
     if not check_aot:
         cmd.append("--no-aot")
+    # Fail-closed no-fallback: for a changed/tuned candidate row, require the strict
+    # run to actually resolve the intended kernelName2 (else raise instead of
+    # silently using the default/heuristic dispatch).  Proves the measured row used
+    # the candidate kernel, not a fallback (R1 review item).
+    if expect_kernel_name2:
+        cmd += ["--require-tuned-fmoe", "--expect-kernel-name2", expect_kernel_name2]
     return cmd
 
 
@@ -923,6 +934,7 @@ def run_point(
     measure_e2e: bool = True,
     reps: int = 3,
     check_aot: bool = True,
+    expect_kernel_name2: str = "",
 ) -> PointRow:  # pragma: no cover - exercised only on the gfx950 node
     """Measure one workload point: FlyDSL per-stage us + aiter e2e/correctness.
 
@@ -944,7 +956,7 @@ def run_point(
     for this row: the aiter command is appended only when ``measure_e2e`` is True.
     """
     flydsl_cmd = _flydsl_cmd(rp, gpu_id, tile)
-    aiter_cmd = _aiter_cmd(rp, check_aot=check_aot)
+    aiter_cmd = _aiter_cmd(rp, check_aot=check_aot, expect_kernel_name2=expect_kernel_name2)
     # The FlyDSL benchmark must emit its true per-iteration distribution; the env
     # is part of the reproducible command provenance (a replay must set it too).
     flydsl_env = {"FLYDSL_PERF_DIST": "1"}
@@ -1020,6 +1032,7 @@ def run_point(
         strict_error=strict_error,
         error_category=error_category,
         aot_status=aot_status,
+        expected_kernel_name2=expect_kernel_name2,
     )
     if combined_samples:
         row.stage1_us = summarize(s1_samples)["median"]
@@ -1127,6 +1140,13 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
     ap.add_argument("--dtype", default=None, help="restrict to one dtype alias, e.g. a4w4 (candidate mode)")
     ap.add_argument("--tokens", default=None, help="comma/space-separated token list (candidate mode)")
     ap.add_argument("--reps", type=int, default=3, help="independent subprocess reps per point")
+    ap.add_argument(
+        "--expect-kernel-name2",
+        default="",
+        help="fail-closed no-fallback: require the strict run to resolve this exact "
+        "stage2 kernelName2 (else raise). Use for changed/tuned candidate rows so the "
+        "measurement proves the candidate kernel ran, not a default fallback.",
+    )
     for _k in (
         "tile-m1",
         "tile-n1",
@@ -1219,6 +1239,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                 measure_e2e=not args.no_e2e,
                 reps=args.reps,
                 check_aot=not args.no_aot_check,
+                expect_kernel_name2=args.expect_kernel_name2,
             )
             for i, rp in enumerate(run_list)
         ]
@@ -1287,6 +1308,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                 measure_e2e=not args.no_e2e,
                 reps=args.reps,
                 check_aot=not args.no_aot_check,
+                expect_kernel_name2=args.expect_kernel_name2,
             )
             for rp in run_list
         ]

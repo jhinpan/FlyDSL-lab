@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import sys
 
 
@@ -77,7 +78,29 @@ def main(argv=None) -> int:
     ap.add_argument("--iters", type=int, default=100)
     ap.add_argument("--no-aot", action="store_true", help="disable AOT-cache check (records it)")
     ap.add_argument("--aiter-repo", default="/sgl-workspace/aiter")
+    ap.add_argument(
+        "--require-tuned-fmoe",
+        action="store_true",
+        help="fail closed (AITER_REQUIRE_TUNED_FMOE=1): raise if no tuned row resolves "
+        "instead of falling back to default heuristics.",
+    )
+    ap.add_argument(
+        "--expect-kernel-name2",
+        default="",
+        help="fail closed (AITER_EXPECT_FMOE_KERNELNAME2): raise unless the resolved "
+        "stage2 kernelName2 matches this exactly -- proves the measured row used the "
+        "intended kernel, not a fallback.",
+    )
     args = ap.parse_args(argv)
+
+    # Bind no-fallback enforcement into the aiter dispatch BEFORE the module runs,
+    # so a missing/mismatched tuned row fails the strict run instead of silently
+    # using the default/heuristic path (R1 review: the win CSV must be measured
+    # fail-closed, not merely prove the env switches can exist).
+    if args.require_tuned_fmoe:
+        os.environ["AITER_REQUIRE_TUNED_FMOE"] = "1"
+    if args.expect_kernel_name2:
+        os.environ["AITER_EXPECT_FMOE_KERNELNAME2"] = args.expect_kernel_name2
 
     mod = _load_aiter_module(args.aiter_repo)
     import aiter
@@ -141,6 +164,8 @@ def main(argv=None) -> int:
         "gate": args.gate,
         "aq": args.aq,
         "wq": args.wq,
+        "require_tuned_fmoe": bool(args.require_tuned_fmoe),
+        "expected_kernel_name2": args.expect_kernel_name2,
     }
     try:
         ret = test_fn(

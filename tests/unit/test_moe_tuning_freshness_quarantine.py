@@ -14,6 +14,7 @@ from scripts.moe_tuning_ledger import (  # noqa: E402
     compare_csvs,
     compare_csvs_dispatch_change,
     scan_candidate_csv_freshness,
+    scan_changed_rows_fail_closed,
     selected_candidate_gate,
 )
 
@@ -68,6 +69,7 @@ _COLS = [
     "strict_error",
     "error_category",
     "aot_status",
+    "expected_kernel_name2",
 ]
 
 
@@ -343,6 +345,44 @@ def test_dispatch_change_requires_config_identity_columns(tmp_path):
     assert v.incomplete_config_points
     assert "persist_m1" in v.incomplete_config_points[0][1]
     assert v.large_wins == []
+
+
+def test_reference_invalid_never_passes_gate_without_quarantine(tmp_path):
+    # A reference_invalid row must FAIL the selected-candidate gate when it is NOT
+    # in the quarantine allow-list -- quarantine is opt-in, never automatic.
+    bad = _row(
+        model="deepseek_v3",
+        model_dim="7168",
+        inter_dim="256",
+        experts="257",
+        topk="9",
+        act="silu",
+        token="1",
+        correctness_pass="False",
+        logits_diff="nan",
+        error_category="reference_invalid",
+    )
+    p = _write(tmp_path / "r.csv", [bad])
+    g = selected_candidate_gate(p)  # no quarantine_keys
+    assert g["passed"] is False
+    assert any("correctness_pass" in v[1] for v in g["violations"])
+
+
+def test_changed_rows_fail_closed_requires_expected_kernel(tmp_path):
+    changed = {("gpt_oss", "a4w4", "swiglu", "16384")}
+    # row WITHOUT expected_kernel_name2 -> offender
+    no_enf = _row(model="gpt_oss", token="16384", expected_kernel_name2="")
+    p = _write(tmp_path / "noenf.csv", [no_enf])
+    off = scan_changed_rows_fail_closed(p, changed)
+    assert len(off) == 1 and "expected_kernel_name2" in off[0][-1]
+    # row WITH expected_kernel_name2 -> clean
+    enf = _row(
+        model="gpt_oss",
+        token="16384",
+        expected_kernel_name2="flydsl_moe2_afp4_wfp4_bf16_t64x128x256_atomic_pm1",
+    )
+    p2 = _write(tmp_path / "enf.csv", [enf])
+    assert scan_changed_rows_fail_closed(p2, changed) == []
 
 
 if __name__ == "__main__":

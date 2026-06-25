@@ -1021,33 +1021,12 @@ def scan_win_label_backed_by_claimable(
             if not os.path.exists(cand_abs):
                 offenders.append((ts, model, f"config.claimable=True but candidate csv_path does not exist: {cand}"))
                 continue
-            cfg = rec.get("config") or {}
-            # A dispatch-only change is validated by compare_csvs_dispatch_change
-            # against the recorded FRESH PAIRED baseline (not the locked snapshot),
-            # because identical-config unchanged rows drift cross-session and the
-            # locked baseline is invalid as their numeric denominator.
-            if cfg.get("verdict") == "dispatch_change":
-                ev = rec.get("evidence") or {}
-                base_rel = ev.get("baseline_csv") or rec.get("baseline_csv") or ""
-                base_abs = base_rel if os.path.isabs(base_rel) else os.path.join(repo_root, base_rel)
-                changed = {tuple(k) for k in ev.get("changed_keys") or []}
-                quar = {tuple(k) for k in ev.get("quarantine_keys") or []}
-                if not base_rel or not os.path.exists(base_abs):
-                    offenders.append((ts, model, f"dispatch_change win but fresh paired baseline missing: {base_rel}"))
-                    continue
-                if not changed:
-                    offenders.append((ts, model, "dispatch_change win but evidence.changed_keys missing"))
-                    continue
-                try:
-                    ok = compare_csvs_dispatch_change(
-                        base_abs, cand_abs, changed_keys=changed, quarantine_keys=quar
-                    ).claimable_dispatch_win
-                except Exception as e:
-                    offenders.append((ts, model, f"dispatch_change recompute raised: {e!r}"))
-                    continue
-                if not ok:
-                    offenders.append((ts, model, "dispatch_change win but claimable_dispatch_win recomputes False"))
-                continue
+            # An active result:"win" is ALWAYS validated against the locked-baseline
+            # comparator (the immutable win definition).  There is NO dispatch_change
+            # bypass: compare_csvs_dispatch_change is diagnostic-only and must never
+            # back a result:"win" row (R1 review: redefining the win in mutable text
+            # is an integrity violation).  A dispatch-only result must be recorded as
+            # result:"neutral" dispatch-evidence, not "win".
             if not os.path.exists(baseline_csv):
                 offenders.append((ts, model, f"config.claimable=True but baseline CSV does not exist: {baseline_csv}"))
                 continue
@@ -1060,6 +1039,30 @@ def scan_win_label_backed_by_claimable(
                 offenders.append(
                     (ts, model, "config.claimable=True but compare_csvs(...).claimable_win is False for csv_path")
                 )
+    return offenders
+
+
+def scan_changed_rows_fail_closed(candidate_csv: str, changed_keys: set) -> List[Tuple]:
+    """Require every CHANGED candidate row to carry expected-kernel enforcement.
+
+    A dispatch-only change is only trustworthy if the changed rows were measured
+    FAIL-CLOSED: the strict run must have required the intended stage2 kernelName2
+    (``expected_kernel_name2`` non-empty, and ending in the tuned suffix), so a
+    silent fallback to the default/heuristic kernel could not have produced a
+    passing row.  Returns ``(model,dtype,act,token,reason)`` offenders; empty == OK.
+    """
+    offenders: List[Tuple] = []
+    if not os.path.exists(candidate_csv):
+        return [("", "", "", "", f"candidate_csv missing: {candidate_csv}")]
+    rows = read_point_csv(candidate_csv)
+    for key in changed_keys:
+        row = rows.get(tuple(key))
+        if row is None:
+            offenders.append((*key, "changed row missing from candidate CSV"))
+            continue
+        exp = (row.get("expected_kernel_name2") or "").strip()
+        if not exp:
+            offenders.append((*key, "changed row has no expected_kernel_name2 (not measured fail-closed)"))
     return offenders
 
 
@@ -1127,6 +1130,7 @@ __all__ = [
     "scan_win_label_backed_by_claimable",
     "scan_no_self_contradictory_active_rejection",
     "scan_candidate_csv_freshness",
+    "scan_changed_rows_fail_closed",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
