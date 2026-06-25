@@ -708,17 +708,18 @@ def scan_win_label_backed_by_claimable(
     be recorded as ``result:"neutral"`` with a "subset candidate, not claimable"
     note.
 
-    Two independent gates, BOTH required (a hand-written marker can never bypass
-    the official comparator):
+    The scan FAILS CLOSED: an active ``result:"win"`` row is clean ONLY when ALL
+    of the following hold, and ANY failure (including an unloadable artifact) is an
+    offender -- a hand-written marker can never bypass the official comparator by
+    pointing at a missing/empty/unreadable CSV:
 
-    1. The row MUST carry ``config.claimable == True`` (the promotion-path marker).
-    2. The row's ``csv_path`` MUST actually satisfy
-       ``compare_csvs(baseline, csv_path).claimable_win`` -- recomputed here from
-       the recorded CSV, so a marker set on a non-claimable CSV is still flagged.
+    1. ``config.claimable is True`` (the promotion-path marker), AND
+    2. ``csv_path`` is present and non-empty, AND
+    3. both the candidate CSV and the locked baseline CSV exist on disk, AND
+    4. ``compare_csvs(baseline, csv_path).claimable_win`` recomputes to True
+       (a comparator exception on a malformed/unreadable CSV is an offender).
 
-    ``baseline_csv`` defaults to the committed locked baseline.  If the candidate
-    CSV or the baseline cannot be read, the recompute is skipped (the marker gate
-    still applies) so the scan never false-flags on a missing artifact.  Returns
+    ``baseline_csv`` defaults to the committed locked baseline.  Returns
     ``(timestamp, model, reason)`` per offender (empty == clean).
     """
     if not os.path.exists(path):
@@ -734,28 +735,31 @@ def scan_win_label_backed_by_claimable(
             rec = json.loads(ln)
             if rec.get("result") != "win" or "superseded_by" in rec:
                 continue
+            ts, model = rec.get("timestamp"), rec.get("model")
             if (rec.get("config") or {}).get("claimable") is not True:
-                offenders.append(
-                    (rec.get("timestamp"), rec.get("model"), "win row missing config.claimable=True backing")
-                )
+                offenders.append((ts, model, "win row missing config.claimable=True backing"))
                 continue
-            # Marker is set: independently recompute the official comparator verdict
-            # for the recorded CSV.  A marker on a non-claimable CSV is still a defect.
+            # Marker is set -> the official comparator MUST be recomputable and True.
             cand = rec.get("csv_path") or ""
+            if not cand:
+                offenders.append((ts, model, "config.claimable=True but csv_path is missing/empty"))
+                continue
             cand_abs = cand if os.path.isabs(cand) else os.path.join(repo_root, cand)
-            if not cand or not os.path.exists(cand_abs) or not os.path.exists(baseline_csv):
-                continue  # cannot recompute -> marker gate already passed; do not false-flag
+            if not os.path.exists(cand_abs):
+                offenders.append((ts, model, f"config.claimable=True but candidate csv_path does not exist: {cand}"))
+                continue
+            if not os.path.exists(baseline_csv):
+                offenders.append((ts, model, f"config.claimable=True but baseline CSV does not exist: {baseline_csv}"))
+                continue
             try:
-                if not compare_csvs(baseline_csv, cand_abs).claimable_win:
-                    offenders.append(
-                        (
-                            rec.get("timestamp"),
-                            rec.get("model"),
-                            "config.claimable=True but compare_csvs(...).claimable_win is False for csv_path",
-                        )
-                    )
-            except Exception:
-                continue  # unreadable/ill-formed CSV -> do not false-flag on the recompute
+                claimable = compare_csvs(baseline_csv, cand_abs).claimable_win
+            except Exception as e:
+                offenders.append((ts, model, f"config.claimable=True but compare_csvs raised on csv_path: {e!r}"))
+                continue
+            if not claimable:
+                offenders.append(
+                    (ts, model, "config.claimable=True but compare_csvs(...).claimable_win is False for csv_path")
+                )
     return offenders
 
 

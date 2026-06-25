@@ -984,9 +984,11 @@ def test_scan_win_label_backed_by_claimable(tmp_path):
     open(path, "w").write(_json.dumps(_row("win", 1.0)) + "\n")
     off = ledger.scan_win_label_backed_by_claimable(path)
     assert off and off[0][0] == 1.0 and off[0][1] == "gpt_oss"
-    # A win row explicitly marked claimable is clean.
+    # A win row marked claimable but with NO csv_path FAILS CLOSED (the marker alone
+    # is never sufficient -- the comparator must be recomputable).
     open(path, "w").write(_json.dumps(_row("win", 2.0, claimable=True)) + "\n")
-    assert ledger.scan_win_label_backed_by_claimable(path) == []
+    off = ledger.scan_win_label_backed_by_claimable(path)
+    assert off and off[0][0] == 2.0 and "csv_path is missing/empty" in off[0][2]
     # A neutral subset-candidate row is not a win and is never flagged.
     open(path, "w").write(_json.dumps(_row("neutral", 3.0)) + "\n")
     assert ledger.scan_win_label_backed_by_claimable(path) == []
@@ -1056,6 +1058,56 @@ def test_scan_win_label_recomputes_comparator(tmp_path):
     open(path, "w").write(_json.dumps(rec) + "\n")
     off = ledger.scan_win_label_backed_by_claimable(path, baseline_csv=baseline, repo_root=str(tmp_path))
     assert off and off[0][0] == 9.0 and "claimable_win is False" in off[0][2]
+
+
+def test_scan_win_label_fails_closed_on_unloadable_csv(tmp_path):
+    """A marker-set win row must NOT pass when its CSV/baseline cannot be loaded:
+    the guard fails closed for missing/empty/nonexistent/malformed CSV and for a
+    missing baseline (the R18-review bypass classes)."""
+    import csv as _c
+    import json as _json
+
+    path = str(tmp_path / "attempts.jsonl")
+    baseline = str(tmp_path / "baseline.csv")
+    # A real baseline so the "missing baseline" case is isolated from the others.
+    with open(baseline, "w", newline="") as f:
+        w = _c.DictWriter(f, fieldnames=["model", "dtype", "act", "token", "kernel_path_us", "e2e_us", "mfu"])
+        w.writeheader()
+        w.writerow(
+            dict(model="gpt_oss", dtype="a4w4", act="swiglu", token=16384, kernel_path_us=2900, e2e_us=2000, mfu=0.28)
+        )
+
+    def _win(ts, **over):
+        rec = {"result": "win", "model": "gpt_oss", "config": {"claimable": True}, "timestamp": ts}
+        rec.update(over)
+        return rec
+
+    # (1) csv_path key absent.
+    open(path, "w").write(_json.dumps(_win(1.0)) + "\n")
+    off = ledger.scan_win_label_backed_by_claimable(path, baseline_csv=baseline, repo_root=str(tmp_path))
+    assert off and "csv_path is missing/empty" in off[0][2]
+    # (2) csv_path empty string.
+    open(path, "w").write(_json.dumps(_win(2.0, csv_path="")) + "\n")
+    off = ledger.scan_win_label_backed_by_claimable(path, baseline_csv=baseline, repo_root=str(tmp_path))
+    assert off and "csv_path is missing/empty" in off[0][2]
+    # (3) nonexistent candidate CSV.
+    open(path, "w").write(_json.dumps(_win(3.0, csv_path="nope/missing.csv")) + "\n")
+    off = ledger.scan_win_label_backed_by_claimable(path, baseline_csv=baseline, repo_root=str(tmp_path))
+    assert off and "does not exist" in off[0][2]
+    # (4) malformed/unreadable candidate CSV (exists but is not valid).
+    bad = str(tmp_path / "bad.csv")
+    open(bad, "wb").write(b"\x00\x01 not,a,valid\ncsv\x00")
+    open(path, "w").write(_json.dumps(_win(4.0, csv_path=bad)) + "\n")
+    off = ledger.scan_win_label_backed_by_claimable(path, baseline_csv=baseline, repo_root=str(tmp_path))
+    # A malformed CSV either raises (comparator-raised) or yields a non-claimable verdict;
+    # both are offenders. The key property: it is NOT silently clean.
+    assert off and off[0][0] == 4.0
+    # (5) missing baseline CSV.
+    open(path, "w").write(_json.dumps(_win(5.0, csv_path=baseline)) + "\n")
+    off = ledger.scan_win_label_backed_by_claimable(
+        path, baseline_csv=str(tmp_path / "no_baseline.csv"), repo_root=str(tmp_path)
+    )
+    assert off and "baseline CSV does not exist" in off[0][2]
 
 
 def test_committed_win_labels_backed_by_claimable():
