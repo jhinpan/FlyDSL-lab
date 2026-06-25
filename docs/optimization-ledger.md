@@ -157,17 +157,30 @@ as k_batch grows (DS V3 kb=2 +9.4%/+7.0% → kb=28 +84%/+96%; Kimi kb=2 +9.3%/-0
 at skinny M. No win. Split-K is a large-K/large-M lever, not a small-token MoE
 lever — confirmed by direct correct measurement, not by assertion.
 
+R28 — stage2 waves_per_eu occupancy cap (NEGATIVE). A default-off
+`waves_per_eu` knob on `compile_mixed_moe_gemm2` inflates LDS to a per-CU minimum
+so at most `wpe` workgroups co-reside (the stage1 waves_per_eu semantics; the
+lowest-risk self-contained occupancy lever — it does NOT touch the shared
+`c_shuffle_epilog` primitive, which would be a multi-round high-risk rewrite of a
+production-shared helper). Strict-ref passes. Measured `waves_per_eu2 ∈ {1,2,8}`
+for DS V3 + Kimi 32/64: NEUTRAL (kp within ±1.6%, no win). Capping occupancy does
+not break the LDS-wait latency stall — the small-token stage2 bottleneck is not
+occupancy-bound.
+
 STATUS: AC-4 remains **ACTIVE / not met**. EVERY in-scope AC-4 lever is now
 measured below-gate (or correctly measured as a loss): stage1 tile, stage2
 tile_n2, persist_m2 {0,1,2,4,8,16}, tile_m2, the full stage2 A-prefetch surface
-(R22/R23/R25), and now CORRECT stage1 split-K {2,4,7,14,28} (R27). The only
-remaining levers (deeper multi-buffer stage2 pipeline, `use_async_copy`) are
-multi-round architectural rewrites that exceed the remaining loop budget. With
-the split-K lever now correctly measured and lost, a cost/benefit decision
-(invest a multi-round stage2-pipeline rewrite vs accept a documented
-no-small-token-win on the tractable surface and redirect to the AC-3 GPT-OSS
-promotion) is reasonable to surface to the user. All measurements/rejections are
-replayable; see `docs/loop2_models/*_a4w4_small_*` and the loss/rejected rows in
+(R22/R23/R25), CORRECT stage1 split-K {2,4,7,14,28} (R27), and stage2
+waves_per_eu occupancy cap (R28). The only remaining lever is a multi-round
+rewrite of the SHARED `c_shuffle_epilog` LDS-layout primitive (bank-conflict-free
+swizzle) or `use_async_copy` — both high-risk changes to a production-shared
+helper that exceed the remaining loop budget and risk the GEMM/MoE kernels that
+share it. With every self-contained AC-4 lever now correctly measured and lost, a
+cost/benefit decision (invest a multi-round shared-primitive rewrite vs accept a
+documented no-small-token-win on the tractable surface and redirect to the AC-3
+GPT-OSS promotion) is reasonable to surface to the user. All measurements/
+rejections are replayable; see `docs/loop2_models/*_a4w4_small_*` and the
+loss/rejected rows in
 `docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
