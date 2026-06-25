@@ -2456,6 +2456,7 @@ def compile_mixed_moe_gemm2(
     stage2_lds_load_bytes: int = 16,
     stage2_a_prefetch_schedule: str = "baseline",
     stage2_a_prefetch_scope: str = "front",
+    waves_per_eu: int = 0,
 ):
     """Compile stage2 kernel (`moe_gemm2`) and return the compiled executable.
 
@@ -2654,6 +2655,9 @@ def compile_mixed_moe_gemm2(
         )
     if stage2_a_prefetch_scope not in ("front", "all_m"):
         raise ValueError(f"stage2_a_prefetch_scope must be 'front' or 'all_m', got {stage2_a_prefetch_scope!r}")
+    if waves_per_eu < 0:
+        raise ValueError(f"waves_per_eu must be >= 0 (0 = unset/default), got {waves_per_eu}")
+    _wpe_tag = f"_wpe{waves_per_eu}" if waves_per_eu >= 1 else ""
     _sbm_tag = "" if _sort_block_m == tile_m else f"_sbm{_sort_block_m}"
     _pm_tag = f"_persist_cu{_cu_num}" if _persistent else f"_pm{persist_m}"
     _xcd_tag = f"_xcd{xcd_swizzle}" if xcd_swizzle > 0 else ""
@@ -2673,7 +2677,7 @@ def compile_mixed_moe_gemm2(
     module_name = (
         f"mfma_moe2_a{a_dtype}_w{b_dtype}_{out_s}_{epilog_tag}"
         f"_t{tile_m}x{tile_n}x{tile_k}"
-        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}{_ldsld_tag}{_aps_tag}{_apsc_tag}"
+        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}{_ldsld_tag}{_aps_tag}{_apsc_tag}{_wpe_tag}"
     ).replace("-", "_")
     # -- LDS sizing (pure Python; no MLIR Context needed) ---------------------
     # Ping-pong A2 tiles via separate allocators (like stage1).
@@ -2696,6 +2700,19 @@ def compile_mixed_moe_gemm2(
 
     lds_ping_offset = allocator_ping._align(allocator_ping.ptr, 16)
     allocator_ping.ptr = lds_ping_offset + _ping_buffer_bytes
+
+    # Optional occupancy cap (deeper small-token lever): inflate LDS to a per-CU
+    # minimum so at most `waves_per_eu` workgroups co-reside, matching the stage1
+    # waves_per_eu semantics.  Default (0/unset) leaves LDS unchanged -> the
+    # kernel is byte-identical to before.
+    if waves_per_eu is not None and waves_per_eu >= 1:
+        _total_cu_lds = 160 * 1024
+        _min_lds = _total_cu_lds // (waves_per_eu + 1) + 1
+        _pong_sz = allocator_pong._align(allocator_pong.ptr, 128)
+        _ping_sz = allocator_ping._align(allocator_ping.ptr, 128)
+        _cur_lds = _pong_sz + _ping_sz
+        if _cur_lds < _min_lds:
+            allocator_ping.ptr += _min_lds - _cur_lds
 
     if True:
 

@@ -82,6 +82,7 @@ CSV_COLUMNS = [
     "stage2_a_prefetch_schedule",
     "stage2_a_prefetch_scope",
     "k_batch1",
+    "waves_per_eu2",
     # metrics (median + p95 over iters)
     "stage1_us",
     "stage2_us",
@@ -200,6 +201,7 @@ class PointRow:
     stage2_a_prefetch_schedule: str = "baseline"
     stage2_a_prefetch_scope: str = "front"
     k_batch1: int = 1
+    waves_per_eu2: int = 0
     stage1_us: Optional[float] = None
     stage2_us: Optional[float] = None
     sorting_us: Optional[float] = None
@@ -255,6 +257,7 @@ class PointRow:
             "stage2_a_prefetch_schedule",
             "stage2_a_prefetch_scope",
             "k_batch1",
+            "waves_per_eu2",
             "stage1_us",
             "stage2_us",
             "sorting_us",
@@ -517,6 +520,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         "xcd_swizzle2",
         "stage2_lds_load_bytes",
         "k_batch1",
+        "waves_per_eu2",
     ):
         if overrides.get(k) is not None:
             tile[k] = int(overrides[k])
@@ -550,6 +554,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         tile_k=tile["tile_k2"],
         a_dtype=a_dtype,
         sort_block_m=sort_block_m2,
+        waves_per_eu=tile["waves_per_eu2"] if tile["waves_per_eu2"] >= 1 else 4,
         persist_m=tile["persist_m2"],
         xcd_swizzle=tile["xcd_swizzle2"],
         stage2_lds_load_bytes=tile["stage2_lds_load_bytes"],
@@ -837,6 +842,8 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
         str(tile.get("stage2_a_prefetch_scope", "front")),
         "--k_batch1",
         str(tile.get("k_batch1", 1)),
+        "--waves_per_eu2",
+        str(tile.get("waves_per_eu2", 0)),
         "--skip_ref",
         "true",
         "--compare_aiter_ck",
@@ -1008,6 +1015,7 @@ def run_point(
         stage2_a_prefetch_schedule=tile.get("stage2_a_prefetch_schedule", "baseline"),
         stage2_a_prefetch_scope=tile.get("stage2_a_prefetch_scope", "front"),
         k_batch1=tile.get("k_batch1", 1),
+        waves_per_eu2=tile.get("waves_per_eu2", 0),
         flydsl_command=flydsl_command_str,
         strict_error=strict_error,
         error_category=error_category,
@@ -1068,6 +1076,7 @@ _DEFAULT_LAUNCH = {
     "stage2_a_prefetch_schedule": "baseline",
     "stage2_a_prefetch_scope": "front",
     "k_batch1": 1,
+    "waves_per_eu2": 0,
 }
 
 
@@ -1131,6 +1140,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "xcd-swizzle2",
         "stage2-lds-load-bytes",
         "k-batch1",
+        "waves-per-eu2",
     ):
         ap.add_argument(f"--{_k}", type=int, default=None, help=f"candidate {_k.replace('-', '_')} override")
     # String-valued stage2 knob (separate from the int loop above).
@@ -1186,6 +1196,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "stage2_a_prefetch_schedule": args.stage2_a_prefetch_schedule,
         "stage2_a_prefetch_scope": args.stage2_a_prefetch_scope,
         "k_batch1": args.k_batch1,
+        "waves_per_eu2": args.waves_per_eu2,
     }
 
     if args.mode == "candidate":
@@ -1241,6 +1252,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                                 "stage2_a_prefetch_schedule",
                                 "stage2_a_prefetch_scope",
                                 "k_batch1",
+                                "waves_per_eu2",
                             )
                         },
                         "reason": "no parseable kernel-path stage times emitted: the subprocess returned "

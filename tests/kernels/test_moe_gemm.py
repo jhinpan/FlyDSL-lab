@@ -950,6 +950,7 @@ def run_moe_stage2(
     stage2_lds_load_bytes: int = 16,
     stage2_a_prefetch_schedule: str = "baseline",
     stage2_a_prefetch_scope: str = "front",
+    waves_per_eu2: int = 0,
 ):
     """MoE stage2 (gemm2): out2[t] = sum_{slot} ( out1[t,slot] @ W2[expert]^T ) with optional routed weight."""
 
@@ -1344,6 +1345,7 @@ def run_moe_stage2(
             stage2_lds_load_bytes=stage2_lds_load_bytes,
             stage2_a_prefetch_schedule=stage2_a_prefetch_schedule,
             stage2_a_prefetch_scope=stage2_a_prefetch_scope,
+            waves_per_eu=waves_per_eu2,
         )
         bias_dummy = torch.empty((0,), device=device, dtype=torch.float32)
 
@@ -1846,6 +1848,7 @@ def test_moe_gemm_2stage(
     stage2_a_prefetch_schedule: str = "baseline",
     stage2_a_prefetch_scope: str = "front",
     k_batch1: int = 1,
+    waves_per_eu2: int = 0,
 ):
     """Single 2-stage test: gemm1 -> quantize -> gemm2, with routing built once.
 
@@ -2016,6 +2019,7 @@ def test_moe_gemm_2stage(
         stage2_lds_load_bytes=stage2_lds_load_bytes,
         stage2_a_prefetch_schedule=stage2_a_prefetch_schedule,
         stage2_a_prefetch_scope=stage2_a_prefetch_scope,
+        waves_per_eu2=waves_per_eu2,
     )
 
 
@@ -2561,6 +2565,12 @@ if __name__ == "__main__":
         default="front",
         help="Stage2 A-prefetch data-hoist scope: 'front' (mi_idx==0 only) or 'all_m' (all packed-M A LDS reads).",
     )
+    parser.add_argument(
+        "--waves_per_eu2",
+        type=int,
+        default=0,
+        help="Stage2 occupancy cap via LDS padding (0 = unset/default; >=1 caps co-resident workgroups).",
+    )
 
     # Sorting / comparison knobs
     parser.add_argument(
@@ -2697,6 +2707,7 @@ if __name__ == "__main__":
             stage2_a_prefetch_schedule=str(args.stage2_a_prefetch_schedule),
             stage2_a_prefetch_scope=str(args.stage2_a_prefetch_scope),
             k_batch1=int(args.k_batch1),
+            waves_per_eu2=int(args.waves_per_eu2),
         )
 
     # Run 2-stage (gemm1 -> quantize -> gemm2) aiter-style test/benchmark.

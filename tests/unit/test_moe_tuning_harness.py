@@ -2160,6 +2160,35 @@ def test_stage2_a_prefetch_scope_threading():
     assert "stage2_a_prefetch_scope" in harness.CSV_COLUMNS and d["stage2_a_prefetch_scope"] == "all_m"
 
 
+def test_waves_per_eu2_threading():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    # default stage2 occupancy knob is 0 (unset)
+    assert harness.default_tile_for(rp)["waves_per_eu2"] == 0
+    # override applied
+    assert harness.candidate_tile_for(rp, {"waves_per_eu2": 2})["waves_per_eu2"] == 2
+    # _flydsl_cmd emits the flag
+    tile = harness.candidate_tile_for(rp, {"waves_per_eu2": 2})
+    cmd = harness._flydsl_cmd(rp, "0", tile)
+    assert "--waves_per_eu2" in cmd and cmd[cmd.index("--waves_per_eu2") + 1] == "2"
+    # CSV serializes (default 0)
+    prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
+    row = harness.PointRow(
+        provenance=prov,
+        command="x",
+        model="deepseek_v3",
+        model_dim=7168,
+        inter_dim=256,
+        experts=257,
+        topk=9,
+        dtype="a4w4",
+        act="silu",
+        token=32,
+        waves_per_eu2=2,
+    )
+    d = row.to_csv_dict()
+    assert "waves_per_eu2" in harness.CSV_COLUMNS and d["waves_per_eu2"] == 2
+
+
 def test_fp4_splitk_launch_zeros_per_launch():
     """The fp4 stage1 split-K launch wrapper must zero the atomic accumulation
     buffer before every compiled-kernel call (so run_perftest warmup/timed iters
