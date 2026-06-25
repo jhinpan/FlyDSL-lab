@@ -636,6 +636,8 @@ _MEASURED_KNOB_TOKENS = {
     "persist_m2": ("tests/kernels/test_moe_gemm.py",),
     "xcd_swizzle1": ("tests/kernels/test_moe_gemm.py",),
     "xcd_swizzle2": ("tests/kernels/test_moe_gemm.py",),
+    "stage2-lds-load-bytes": ("scripts/moe_tuning_harness.py",),
+    "stage2_lds_load_bytes": ("tests/kernels/test_moe_gemm.py",),
 }
 _MEASURED_RESULTS = ("win", "loss", "neutral")
 

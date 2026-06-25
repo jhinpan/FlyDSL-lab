@@ -82,6 +82,7 @@ locked baseline, more-negative = faster):
 | stage2 persist_m2 {1,2,4,8,16} (legacy mode) | −2.95% / −1.53% (pm2=1) | −3.3% / −2.2% (pm2=1) | <10% | R14–R16 |
 | stage2 persist_m2=0 (persistent-CU mode) | −1.45% / −1.53% | −1.14% / −0.26% | <10% | R21 |
 | stage2 tile_m2=32 (decoupled, sort_block_m=64) | −3.84% / −1.92% | −2.0% / −2.9% | <10% | R20 |
+| stage2 LDS load-width=8 (2x dwordx2 vs 1x dwordx4) — first DEEPER profile-backed lever | −0.11% / +0.99% | +0.17% / +0.34% | <10% | R22 |
 
 Scope notes (precise, not over-broad):
 - `tile_m2` was measured on the R20 candidate path with stage1 `tile_m1=64`, which
@@ -90,16 +91,25 @@ Scope notes (precise, not over-broad):
   path, NOT a general stage2 legality statement — the legality API accepts larger
   `tile_m` when `sort_block_m` matches.
 - "Every lightweight lever measured" is NOT claimed: this is the set measured to
-  date. Deeper levers (`use_async_copy`, split-K, stage2 pipeline/LDS) are part of
-  the in-scope plan and are NOT yet measured.
+  date. Remaining deeper levers (`use_async_copy`, split-K, larger stage2
+  pipeline restructuring) are part of the in-scope plan and are NOT yet measured.
 
-STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win exists on the
-measured lightweight surface, but AC-4 is NOT closed-as-infeasible — the
-profile-backed deeper stage2 LDS/pipeline lever (the accepted profile says small
-tokens are stage2 LDS/pipeline limited) is the next small-token lever to thread
-and measure before any AC-4 conclusion. All measurements are replayable (committed
-HEAD, live idle, reps=3); see `docs/loop2_models/*_a4w4_small_*` and the
-`stage2 tile_m2` / `persist_m` / `tile_n2` loss rows in `docs/attempts.jsonl`.
+R22 — first deeper stage2-LDS lever (NEGATIVE): `stage2_lds_load_bytes=8` splits
+the single 16B (dwordx4) LDS A-load into two contiguous 8B (dwordx2) loads at the
+same XOR16 coords (byte-identical data; correctness preserved). It is neutral /
+slightly worse (kp within ±1% of baseline; stage2 +0.2..+1.1%): two narrower LDS
+loads add instruction overhead without reducing the LDS-wait stall, so this
+particular LDS-load-shape change is not the right deeper lever. The profile's
+LDS-wait bottleneck likely needs a pipeline/scheduling change (deeper ping-pong,
+prefetch restructuring), not a load-width change.
+
+STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win on the
+measured surface (now including the first deeper LDS-load lever). AC-4 is NOT
+closed-as-infeasible — the remaining deeper levers (stage2 pipeline/prefetch
+restructuring, `use_async_copy`, split-K) are the next candidates. All
+measurements are replayable (committed HEAD, live idle, reps=3); see
+`docs/loop2_models/*_a4w4_small_*` and the `stage2 lds_load_bytes` / `tile_m2` /
+`persist_m` / `tile_n2` loss rows in `docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 
