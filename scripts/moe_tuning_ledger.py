@@ -482,6 +482,72 @@ def scan_superseded_rejected_candidates(path: str = ATTEMPTS_JSONL) -> List[Tupl
     return offenders
 
 
+import re as _re  # noqa: E402
+import subprocess as _subprocess  # noqa: E402
+
+# Repo-relative EXECUTABLE/INPUT paths an attempt command depends on (script, CLI,
+# or counter-list).  Deliberately EXCLUDES output artifacts (.csv/.json/.md): an
+# attempt's output files are produced by the run and committed in the SAME or a
+# LATER commit, so they legitimately do not exist at the runtime commit -- only the
+# command's inputs must.  Used by scan_attempt_command_paths.
+_REPO_PATH_RE = _re.compile(r"(?:docs|scripts|kernels|tests)/[\w./-]+\.(?:sh|py|txt)")
+
+
+def scan_attempt_command_paths(path: str = ATTEMPTS_JSONL, repo_root: str = _REPO_ROOT) -> List[Tuple]:
+    """Find attempts whose ``command`` names a repo path absent at the recorded ``commit``.
+
+    AC-7 requires branch+commit+exact-command provenance to be internally
+    consistent: an attempt that says "run docs/.../collect.sh" at commit X is only
+    replayable if that path exists in commit X.  For every non-superseded attempt
+    with a ``commit``, this extracts repo-relative artifact/script paths from the
+    ``command`` and checks ``git cat-file -e <commit>:<path>``.  Paths that are not
+    tracked at HEAD either (i.e. never committed, e.g. /tmp helpers) are ignored —
+    only a path that EXISTS now but is MISSING at the recorded commit is flagged.
+    Returns ``(timestamp, [missing paths])`` per offender (empty == clean).
+    """
+    if not os.path.exists(path):
+        return []
+
+    def _exists_at(commit: str, p: str) -> bool:
+        try:
+            return (
+                _subprocess.run(
+                    ["git", "-C", repo_root, "cat-file", "-e", f"{commit}:{p}"],
+                    capture_output=True,
+                ).returncode
+                == 0
+            )
+        except Exception:
+            return True  # cannot check (no git) -> do not flag
+
+    def _tracked_at_head(p: str) -> bool:
+        return _exists_at("HEAD", p)
+
+    offenders: List[Tuple] = []
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if "superseded_by" in rec:
+                continue
+            commit = rec.get("commit") or ""
+            command = rec.get("command") or ""
+            if not commit:
+                continue
+            missing = []
+            for p in dict.fromkeys(_REPO_PATH_RE.findall(command)):  # dedupe, keep order
+                # Only meaningful for paths that are real tracked artifacts (exist at HEAD);
+                # output CSVs written by the run are also tracked, so this catches both
+                # "script missing at commit" and "output not yet committed at commit".
+                if _tracked_at_head(p) and not _exists_at(commit, p):
+                    missing.append(p)
+            if missing:
+                offenders.append((rec.get("timestamp"), missing))
+    return offenders
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
@@ -495,6 +561,7 @@ __all__ = [
     "scan_replay_consistency",
     "scan_duplicate_rejected_candidates",
     "scan_superseded_rejected_candidates",
+    "scan_attempt_command_paths",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",

@@ -798,6 +798,53 @@ def test_committed_superseded_links_valid():
     assert off == [], f"superseded records linking to the wrong/no successor: {off}"
 
 
+def test_scan_attempt_command_paths(tmp_path):
+    import json as _json
+
+    # Build a tiny git repo with a committed script, then test consistency.
+    import subprocess as _sp
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _sp.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    _sp.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    _sp.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    # First an EMPTY commit (no script) for the negative case.
+    _sp.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "empty"], check=True)
+    empty_commit = _sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    # Then add the script.
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run.sh").write_text("echo hi\n")
+    _sp.run(["git", "-C", str(repo), "add", "."], check=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-q", "-m", "add run.sh"], check=True)
+    good_commit = _sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    later_commit = good_commit
+
+    path = str(tmp_path / "attempts.jsonl")
+
+    def _rec(commit):
+        return {"result": "neutral", "command": "bash scripts/run.sh", "commit": commit, "timestamp": 1.0}
+
+    # consistent: commit contains the script.
+    open(path, "w").write(_json.dumps(_rec(good_commit)) + "\n")
+    assert ledger.scan_attempt_command_paths(path, repo_root=str(repo)) == []
+    open(path, "w").write(_json.dumps(_rec(later_commit)) + "\n")
+    assert ledger.scan_attempt_command_paths(path, repo_root=str(repo)) == []
+    # mismatched: the root (empty) commit lacks the script -> flagged.
+    open(path, "w").write(_json.dumps(_rec(empty_commit)) + "\n")
+    off = ledger.scan_attempt_command_paths(path, repo_root=str(repo))
+    assert off and off[0][0] == 1.0 and "scripts/run.sh" in off[0][1]
+
+
+def test_committed_attempt_command_paths_consistent():
+    """Committed attempt commands must reference repo paths that exist at their commit."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    off = ledger.scan_attempt_command_paths(attempts)
+    assert off == [], f"attempts whose command path is missing at the recorded commit: {off}"
+
+
 def test_row_missing_kernel_path():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
