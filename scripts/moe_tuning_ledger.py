@@ -446,20 +446,42 @@ def scan_duplicate_rejected_candidates(path: str = ATTEMPTS_JSONL) -> List[Tuple
     return [(k, ts) for k, ts in seen.items() if len(ts) > 1]
 
 
+def _measured_supersede_sig(rec: dict) -> Tuple:
+    """Identity for matching a superseded rejection to an active MEASURED successor.
+
+    A measured attempt (loss/neutral/win) covers its whole token list in one CSV
+    and carries no top-level ``token``, so it cannot share a rejected_candidate's
+    ``token``-bearing key.  Match instead on (model,dtype,act,stage,config) -- the
+    tuning identity that makes the rejection and the measurement the same probe."""
+    cfg = rec.get("config") or {}
+    cfg_key = tuple(sorted((str(k), str(v)) for k, v in cfg.items()))
+    return (rec.get("model"), rec.get("dtype"), rec.get("act"), rec.get("stage"), cfg_key)
+
+
 def scan_superseded_rejected_candidates(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
     """Find superseded rejected records that do NOT link to a matching successor.
 
-    Every ``rejected_candidate`` carrying ``superseded_by`` must point at the
-    timestamp of an EXISTING active (non-superseded) rejected record for the SAME
-    rejected key ``(model,dtype,act,token,config)``.  A supersede link to a
-    different probe's record (or to no record) is an evidence-integrity defect:
-    ``scan_duplicate_rejected_candidates`` only proves one active record per key, it
-    does not prove the superseded chain points to the correct successor.  Returns a
-    list of ``(timestamp, reason)`` for offending records (empty == clean).
+    Every ``rejected_candidate`` carrying ``superseded_by`` must point at an
+    EXISTING active (non-superseded) successor that is the SAME probe.  Two valid
+    successor kinds:
+
+    1. An active same-key ``rejected_candidate`` (same
+       ``(model,dtype,act,token,config)`` -- the original rejection->rejection
+       chain, e.g. a regenerated provenance record).
+    2. An active MEASURED result (``loss``/``neutral``/``win``) with the same
+       ``_measured_supersede_sig`` (model/dtype/act/stage/config).  This is the
+       "broken rejection -> fixed-and-measured" case: when a (d)-bucket
+       compiles-but-incorrect kernel is later REPAIRED and measured, the original
+       correctness rejection is superseded by the measured-loss/win attempt, not
+       by a fake same-key rejection marker.
+
+    A link to neither (or to no record) is an evidence-integrity defect.  Returns
+    ``(timestamp, reason)`` per offender (empty == clean).
     """
     if not os.path.exists(path):
         return []
-    active_ts_by_key: Dict[Tuple, set] = {}
+    active_rej_ts_by_key: Dict[Tuple, set] = {}
+    active_measured_ts_by_sig: Dict[Tuple, set] = {}
     superseded: List[dict] = []
     with open(path) as f:
         for ln in f:
@@ -467,18 +489,27 @@ def scan_superseded_rejected_candidates(path: str = ATTEMPTS_JSONL) -> List[Tupl
             if not ln:
                 continue
             rec = json.loads(ln)
-            if rec.get("result") != "rejected_candidate":
-                continue
-            if "superseded_by" in rec:
-                superseded.append(rec)
-            else:
-                active_ts_by_key.setdefault(_rejected_key(rec), set()).add(rec.get("timestamp"))
+            result = rec.get("result")
+            if result == "rejected_candidate":
+                if "superseded_by" in rec:
+                    superseded.append(rec)
+                else:
+                    active_rej_ts_by_key.setdefault(_rejected_key(rec), set()).add(rec.get("timestamp"))
+            elif result in _MEASURED_RESULTS and "superseded_by" not in rec:
+                active_measured_ts_by_sig.setdefault(_measured_supersede_sig(rec), set()).add(rec.get("timestamp"))
     offenders: List[Tuple] = []
     for rec in superseded:
-        key = _rejected_key(rec)
         target = rec.get("superseded_by")
-        if target not in active_ts_by_key.get(key, set()):
-            offenders.append((rec.get("timestamp"), f"superseded_by={target} is not an active record of the same key"))
+        ok = target in active_rej_ts_by_key.get(_rejected_key(rec), set()) or target in active_measured_ts_by_sig.get(
+            _measured_supersede_sig(rec), set()
+        )
+        if not ok:
+            offenders.append(
+                (
+                    rec.get("timestamp"),
+                    f"superseded_by={target} is not an active same-key rejection or matching measured result",
+                )
+            )
     return offenders
 
 
@@ -701,6 +732,51 @@ def scan_measured_attempt_tokens_present_at_commit(
     return offenders
 
 
+# Wording that must never appear in an ACTIVE rejected_candidate row: a rejection
+# that says the underlying defect was fixed / the path now passes / the lever is a
+# measured loss is self-contradictory -- such a record must be SUPERSEDED (by the
+# fixed-and-measured successor), not left active.  Used by
+# scan_no_self_contradictory_active_rejection.
+_CONTRADICTORY_REJECTION_MARKERS = (
+    "SUPERSEDED-STATUS",
+    "is now CORRECT",
+    "strict-ref passes",
+    "strict-ref now passes",
+    "now a measured loss",
+    "measured loss, not a correctness",
+    "no longer broken",
+    "was FIXED",
+)
+
+
+def scan_no_self_contradictory_active_rejection(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
+    """Find ACTIVE rejected_candidate rows whose reason contradicts the rejection.
+
+    A `result:"rejected_candidate"` that is still active (no `superseded_by`) but
+    whose `reason` says the defect was fixed / the path now passes / the lever is a
+    measured loss is an AC-7 truthfulness defect: if the kernel is correct now, the
+    rejection must be SUPERSEDED by the fixed-and-measured successor, not kept as an
+    active "rejection".  Returns `(timestamp, marker)` per offender (empty == clean).
+    """
+    if not os.path.exists(path):
+        return []
+    offenders: List[Tuple] = []
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if rec.get("result") != "rejected_candidate" or "superseded_by" in rec:
+                continue
+            reason = rec.get("reason") or ""
+            for marker in _CONTRADICTORY_REJECTION_MARKERS:
+                if marker in reason:
+                    offenders.append((rec.get("timestamp"), marker))
+                    break
+    return offenders
+
+
 def scan_win_label_backed_by_claimable(
     path: str = ATTEMPTS_JSONL, baseline_csv: str = None, repo_root: str = _REPO_ROOT
 ) -> List[Tuple]:
@@ -786,6 +862,7 @@ __all__ = [
     "scan_rejection_reason_present_at_commit",
     "scan_measured_attempt_tokens_present_at_commit",
     "scan_win_label_backed_by_claimable",
+    "scan_no_self_contradictory_active_rejection",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",

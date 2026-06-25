@@ -789,6 +789,90 @@ def test_scan_superseded_rejected_candidates(tmp_path):
     assert off and off[0][0] == 1.0
 
 
+def test_scan_superseded_rejection_to_measured_result(tmp_path):
+    """A superseded rejection may link to an active MEASURED result (loss/neutral/win)
+    with matching model/dtype/act/stage/config -- the broken-(d)-bucket-then-fixed
+    case (R28). A measured successor with a DIFFERENT config is not accepted."""
+    import json as _json
+
+    path = str(tmp_path / "attempts.jsonl")
+    cfg = {"tile_m1": 64, "k_batch1": 2, "lever": "stage1 split-K (k_batch1)"}
+    rej = {
+        "result": "rejected_candidate",
+        "model": "deepseek_v3",
+        "dtype": "a4w4",
+        "act": "silu",
+        "token": 32,
+        "stage": 1,
+        "config": cfg,
+        "reason": "correctness reject (broken before fix)",
+        "timestamp": 1.0,
+        "superseded_by": 2.0,
+    }
+    loss = {
+        "result": "loss",
+        "model": "deepseek_v3",
+        "dtype": "a4w4",
+        "act": "silu",
+        "stage": 1,
+        "config": cfg,  # same model/dtype/act/stage/config
+        "csv_path": "x.csv",
+        "timestamp": 2.0,
+    }
+    # rejection -> matching measured loss: clean.
+    open(path, "w").write(_json.dumps(rej) + "\n" + _json.dumps(loss) + "\n")
+    assert ledger.scan_superseded_rejected_candidates(path) == []
+    # rejection -> measured result with a DIFFERENT config: offender.
+    loss2 = dict(loss, config={"tile_m1": 64, "k_batch1": 4, "lever": "stage1 split-K (k_batch1)"})
+    open(path, "w").write(_json.dumps(rej) + "\n" + _json.dumps(loss2) + "\n")
+    off = ledger.scan_superseded_rejected_candidates(path)
+    assert off and off[0][0] == 1.0
+
+
+def test_scan_no_self_contradictory_active_rejection(tmp_path):
+    """An active rejected_candidate whose reason says the kernel is fixed / now passes /
+    is a measured loss is an AC-7 contradiction and must be flagged."""
+    import json as _json
+
+    path = str(tmp_path / "attempts.jsonl")
+
+    def _rej(ts, reason, sup=None):
+        r = {
+            "result": "rejected_candidate",
+            "model": "deepseek_v3",
+            "dtype": "a4w4",
+            "act": "silu",
+            "token": 32,
+            "stage": 1,
+            "config": {"k_batch1": 2},
+            "reason": reason,
+            "timestamp": ts,
+        }
+        if sup is not None:
+            r["superseded_by"] = sup
+        return r
+
+    # Active rejection with a contradictory "SUPERSEDED-STATUS" reason -> flagged.
+    open(path, "w").write(_json.dumps(_rej(1.0, "SUPERSEDED-STATUS: the bug was FIXED in R27")) + "\n")
+    off = ledger.scan_no_self_contradictory_active_rejection(path)
+    assert off and off[0][0] == 1.0
+    # A genuine active rejection (no contradiction) -> clean.
+    open(path, "w").write(_json.dumps(_rej(2.0, "tiling-legal but uncompilable: compute_tile IndexError")) + "\n")
+    assert ledger.scan_no_self_contradictory_active_rejection(path) == []
+    # A superseded contradictory row -> not flagged (it is no longer active).
+    open(path, "w").write(_json.dumps(_rej(3.0, "SUPERSEDED-STATUS: fixed", sup=4.0)) + "\n")
+    assert ledger.scan_no_self_contradictory_active_rejection(path) == []
+
+
+def test_committed_no_self_contradictory_active_rejection():
+    """No active committed rejection may contradict a fixed/passing kernel path."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    off = ledger.scan_no_self_contradictory_active_rejection(attempts)
+    assert off == [], f"active rejections contradicting fixed/passing evidence: {off}"
+
+
 def test_committed_superseded_links_valid():
     """Every committed superseded rejected record must link to an active record of the same key."""
     attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
