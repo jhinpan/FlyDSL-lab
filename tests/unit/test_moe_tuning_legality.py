@@ -11,6 +11,9 @@ require a GPU, the FlyROCDL bindings, or a compile.  They lock in two properties
 2. Each named illegal case is rejected with the expected machine-readable reason.
 """
 
+import csv
+import os
+
 import pytest
 
 from kernels.moe_tuning import (
@@ -21,6 +24,47 @@ from kernels.moe_tuning import (
 )
 
 pytestmark = pytest.mark.l0_backend_agnostic
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROFILE_DIR = os.path.join(_REPO_ROOT, "docs", "loop2_profiling")
+
+
+def test_profile_report_table_matches_csv():
+    """The profiling report's AUTOGEN counter table must match its source CSV.
+
+    The R8 re-collect changed dsv3_a4w4_pmc_summary.csv but left the hand-written
+    report table stale.  summarize.py now machine-generates the report table from
+    the CSV; this test fails fast if they ever drift again.
+    """
+    csv_path = os.path.join(_PROFILE_DIR, "dsv3_a4w4_pmc_summary.csv")
+    report = os.path.join(_PROFILE_DIR, "dsv3_a4w4_profile.md")
+    if not (os.path.exists(csv_path) and os.path.exists(report)):
+        pytest.skip("profiling artifacts not present")
+
+    # Expected (token,stage) -> (workgroups, lds_wait/busy, lds/valu, vmem/valu, L2) from the CSV.
+    expected = {}
+    for r in csv.DictReader(open(csv_path)):
+        expected[(r["token"], r["stage"])] = (
+            r["workgroups"],
+            r["lds_wait_per_busy"],
+            r["lds_per_valu"],
+            r["vmem_per_valu"],
+            r["l2_hit_pct"],
+        )
+
+    text = open(report).read()
+    assert "AUTOGEN:pmc-table BEGIN" in text and "AUTOGEN:pmc-table END" in text
+    block = text.split("AUTOGEN:pmc-table BEGIN", 1)[1].split("AUTOGEN:pmc-table END", 1)[0]
+    seen = {}
+    for line in block.splitlines():
+        cells = [c.strip().strip("*") for c in line.split("|")[1:-1]]
+        if len(cells) != 7 or cells[0] in ("token", "---") or "---" in cells[1]:
+            continue
+        tok, stage, wg, lw, lv, vv, l2 = cells
+        seen[(tok, stage)] = (wg, lw, lv, vv, l2)
+
+    assert seen, "no rows parsed from the report AUTOGEN table"
+    assert seen == expected, f"report table differs from CSV:\n report={seen}\n csv={expected}"
 
 
 def test_stage2_block_count_covers_valid_rows():
