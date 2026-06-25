@@ -242,6 +242,18 @@ def _check_stage1(
             False, 1, "tile_n_not_mult_32", f"tile_n={tile_n} must be a positive multiple of 32", params=params
         )
 
+    # Stage1 GEMM1 tiles the inter_dim output by tile_n; the kernel asserts
+    # inter_dim % tile_n == 0, so an N-tile larger than (or not dividing) inter_dim
+    # must be rejected pre-compile rather than crashing stage1 at runtime.
+    if inter_dim % tile_n != 0:
+        return TileCheck(
+            False,
+            1,
+            "inter_dim_not_div_tile_n",
+            f"inter_dim={inter_dim} not divisible by tile_n={tile_n}",
+            params=params,
+        )
+
     # tile_k_bytes % 64 (kernel raises otherwise).
     tile_k_bytes = tile_k * a_elem_bytes
     if tile_k_bytes % 64 != 0:

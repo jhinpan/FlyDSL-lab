@@ -117,7 +117,9 @@ def test_rejects_stage2_inter_dim_not_div_tile_k():
 
 def test_rejects_lds_over_limit():
     # A very large tile pushes stage1 LDS past the gfx950 163840-byte limit.
-    res = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=512, tile_n=512, tile_k=256, a_dtype="fp8")
+    # tile_n=256 divides inter_dim=256 so it reaches the LDS check (not the
+    # inter_dim%tile_n gate); tile_m=512 overflows LDS.
+    res = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=512, tile_n=256, tile_k=256, a_dtype="fp8")
     assert not res.legal
     assert res.reason == "lds_over_limit"
     assert res.lds_bytes is not None and res.lds_bytes > LDS_LIMIT_BYTES["gfx950"]
@@ -157,6 +159,21 @@ def test_rejects_fp4_tile_k_too_small():
     res = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=128, a_dtype="fp4")
     assert not res.legal
     assert res.reason == "tile_k_lt_256"
+
+
+def test_rejects_stage1_tile_n_not_dividing_inter_dim():
+    # Stage1 GEMM1 tiles the inter_dim output by tile_n; the kernel asserts
+    # inter_dim % tile_n == 0.  tile_n=512 does not divide inter_dim=256 -> reject
+    # pre-compile (previously slipped through and crashed stage1 at runtime).
+    res = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=64, tile_n=512, tile_k=256, a_dtype="fp4")
+    assert not res.legal
+    assert res.reason == "inter_dim_not_div_tile_n"
+    # tile_n that divides inter_dim stays legal at the filter level.
+    ok = check_tile_config(stage=1, model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=256, a_dtype="fp4")
+    assert ok.legal
+    # large inter_dim shapes (e.g. GPT-OSS 3072) are unaffected.
+    ok2 = check_tile_config(stage=1, model_dim=3072, inter_dim=3072, tile_m=32, tile_n=128, tile_k=256, a_dtype="fp4")
+    assert ok2.legal
 
 
 def test_rejects_bad_stage_and_dtype():
