@@ -3640,10 +3640,17 @@ def compile_mixed_moe_gemm2(
 
                 acc = [acc_init] * num_acc_n * m_repeat
 
-                # Cross-tile A0+A1 LDS prefetch from pong buffer.
-                a0_prefetch_pong = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_pong)
+                # Cross-tile A0+A1 LDS prefetch from pong buffer.  Under the full-M
+                # data-hoist (_aps_all_m) compute_tile prefetches every (k,mi) pack
+                # itself, so these front-pack prefetches must NOT be emitted (else
+                # they are redundant ignored loads).
                 _a1_col_base = col_offset_base + 128 // a_elem_vec_pack
-                a1_prefetch_pong = lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_pong) if pack_K >= 2 else None
+                if const_expr(_aps_all_m):
+                    a0_prefetch_pong = None
+                    a1_prefetch_pong = None
+                else:
+                    a0_prefetch_pong = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_pong)
+                    a1_prefetch_pong = lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_pong) if pack_K >= 2 else None
 
                 # Main loop: process K tiles in 2-tile ping-pong steps.
                 #
@@ -3695,10 +3702,14 @@ def compile_mixed_moe_gemm2(
                         gpu.barrier()
 
                         # Cross-tile prefetch for the ping tile we are about to compute.
-                        a0_prefetch_ping = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_ping)
-                        a1_prefetch_ping = (
-                            lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_ping) if pack_K >= 2 else None
-                        )
+                        if const_expr(_aps_all_m):
+                            a0_prefetch_ping = None
+                            a1_prefetch_ping = None
+                        else:
+                            a0_prefetch_ping = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_ping)
+                            a1_prefetch_ping = (
+                                lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_ping) if pack_K >= 2 else None
+                            )
 
                         next_k2 = k_iv + c2_tile_k
                         next_k2_py = k_iv_py + tile_k * 2
@@ -3725,10 +3736,14 @@ def compile_mixed_moe_gemm2(
                         gpu.barrier()
 
                         # Cross-tile prefetch for the next pong tile.
-                        a0_prefetch_pong = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_pong)
-                        a1_prefetch_pong = (
-                            lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_pong) if pack_K >= 2 else None
-                        )
+                        if const_expr(_aps_all_m):
+                            a0_prefetch_pong = None
+                            a1_prefetch_pong = None
+                        else:
+                            a0_prefetch_pong = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_pong)
+                            a1_prefetch_pong = (
+                                lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_pong) if pack_K >= 2 else None
+                            )
 
                 if const_expr(odd_k_tiles):
                     # Tail: single remaining tile (already in pong buffer).
@@ -3781,12 +3796,16 @@ def compile_mixed_moe_gemm2(
                     gpu.barrier()
 
                     # Epilogue tile with sw prefetch.
-                    a0_prefetch_ping = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_ping)
-                    a1_prefetch_ping = (
-                        lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_ping)
-                        if pack_K >= 2 and (_pad_ku_skip_s2 == 0 or _tail_ku_s2 >= 2)
-                        else None
-                    )
+                    if const_expr(_aps_all_m):
+                        a0_prefetch_ping = None
+                        a1_prefetch_ping = None
+                    else:
+                        a0_prefetch_ping = lds_load_packs_k64(row_a_lds, col_offset_base, lds_x_ping)
+                        a1_prefetch_ping = (
+                            lds_load_packs_k64(row_a_lds, _a1_col_base, lds_x_ping)
+                            if pack_K >= 2 and (_pad_ku_skip_s2 == 0 or _tail_ku_s2 >= 2)
+                            else None
+                        )
                     acc, epilogue_pf = compute_tile(
                         acc,
                         b_ping_lo,
