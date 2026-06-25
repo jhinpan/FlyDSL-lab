@@ -44,6 +44,31 @@ def test_stage2_block_count_covers_valid_rows():
         stage2_block_count(-1, 64)
 
 
+def test_stage2_block_count_within_upper_bound():
+    # The launch count must also stay within the sorted_expert_ids extent split at
+    # the stage2 tile: stage2_m_blocks <= blocks * ceil(eff_sort_block_m / tile_m).
+    # This mirrors the run_moe_stage2 upper-bound assert.
+    def upper(blocks, eff_sort_block_m, tile_m):
+        return blocks * ((eff_sort_block_m + tile_m - 1) // tile_m)
+
+    # Default coupled path: tile_m == stage1 block size; per-expert padding makes
+    # blocks*tile_m >= num_valid, so coverage count <= blocks*1 = upper bound.
+    tile_m1 = 64
+    blocks = 266
+    num_valid = 14720  # < blocks*tile_m1 = 17024 (per-expert padding slack)
+    n = stage2_block_count(num_valid, tile_m1)
+    assert n * tile_m1 >= num_valid  # coverage
+    assert n <= upper(blocks, tile_m1, tile_m1)  # upper bound (== blocks here)
+
+    # Decoupled path: tile_m2 < tile_m1, upper bound scales by ceil(tile_m1/tile_m2).
+    tile_m1, tile_m2 = 256, 64
+    blocks = 50
+    num_valid = blocks * tile_m1  # 12800 padded rows
+    n = stage2_block_count(num_valid, tile_m2)
+    assert n * tile_m2 >= num_valid  # coverage
+    assert n <= upper(blocks, tile_m1, tile_m2)  # blocks * ceil(256/64) = 200
+
+
 # (stage, model_dim, inter_dim, tile_m, tile_n, tile_k, a_dtype)
 # Derived from run_benchmark.sh MOE_FP4_SHAPES / MOE_A8W4_SHAPES.  Stage1 uses
 # (tile_m, tile_n, tile_k); stage2 uses (tile_m, tile_n2, tile_k2).  In the

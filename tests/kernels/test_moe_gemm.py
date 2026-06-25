@@ -1303,6 +1303,16 @@ def run_moe_stage2(
         assert (
             stage2_m_blocks * int(tile_m) >= _n_valid_rows
         ), f"stage2 under-coverage: {stage2_m_blocks} tiles * {tile_m} < num_valid_ids={_n_valid_rows}"
+        # Upper-bound invariant: splitting each stage1 block (size effective
+        # sort_block_m) into stage2 tile_m sub-tiles yields at most
+        # blocks * ceil(sort_block_m/tile_m) tiles, so stage2_m_blocks must not
+        # exceed that (a larger value would over-launch / read past sorted_ids).
+        _eff_sort_block_m = int(sort_block_m) if int(sort_block_m) else int(tile_m)
+        _max_stage2_m_blocks = int(blocks) * ((_eff_sort_block_m + int(tile_m) - 1) // int(tile_m))
+        assert stage2_m_blocks <= _max_stage2_m_blocks, (
+            f"stage2 over-launch: {stage2_m_blocks} > {_max_stage2_m_blocks} "
+            f"(num_valid_ids={_n_valid_rows}, blocks={blocks}, sort_block_m={sort_block_m}, tile_m={tile_m})"
+        )
         exe = compile_mixed_moe_gemm2(
             model_dim=model_dim,
             inter_dim=inter_dim,

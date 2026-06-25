@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Summarize rocprofv3 PMC counter CSVs (/tmp/pmc_raw_t{T}.csv) into the compact
+DS V3 a4w4 provenance table with explicit units and derived ratios.
+
+Run by collect.sh after rocprofv3 collection.  Emits
+docs/loop2_profiling/dsv3_a4w4_pmc_summary.csv with one row per (token, stage),
+carrying raw counters + derived ratios so the profiling report is auditable
+without the multi-MB raw CSVs.
+"""
+
+import csv
+import os
+
+TOKENS = (32, 64, 16384, 32768)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _agg(path):
+    data, meta = {}, {}
+    with open(path) as f:
+        for r in csv.DictReader(f):
+            n = r["Kernel_Name"]
+            st = "stage1" if "mfma_moe1" in n else ("stage2" if "mfma_moe2" in n else None)
+            if not st:
+                continue
+            d = data.setdefault(st, {})
+            d[r["Counter_Name"]] = d.get(r["Counter_Name"], 0.0) + float(r["Counter_Value"])
+            meta.setdefault(
+                st,
+                {
+                    "grid_workitems": int(r["Grid_Size"]),
+                    "block_threads": int(r["Workgroup_Size"]),
+                    "vgpr": int(r["VGPR_Count"]),
+                    "lds_block": int(r["LDS_Block_Size"]),
+                },
+            )
+    return data, meta
+
+
+def main():
+    rows = []
+    for t in TOKENS:
+        raw = f"/tmp/pmc_raw_t{t}.csv"
+        if not os.path.exists(raw):
+            raise SystemExit(f"missing {raw}; run collect.sh first")
+        data, meta = _agg(raw)
+        for st in ("stage1", "stage2"):
+            d, m = data[st], meta[st]
+            busy = d.get("SQ_BUSY_CYCLES", 0.0)
+            valu = d.get("SQ_INSTS_VALU", 0.0)
+            hit = d.get("TCC_HIT_sum", 0.0)
+            miss = d.get("TCC_MISS_sum", 0.0)
+            ldsw = d.get("SQ_WAIT_INST_LDS", 0.0)
+            lds = d.get("SQ_INSTS_LDS", 0.0)
+            vmem = d.get("SQ_INSTS_VMEM", 0.0)
+            wg = m["grid_workitems"] // m["block_threads"]
+            rows.append(
+                {
+                    "token": t,
+                    "stage": st,
+                    "grid_workitems": m["grid_workitems"],
+                    "block_threads": m["block_threads"],
+                    "workgroups": wg,
+                    "vgpr": m["vgpr"],
+                    "lds_block_bytes": m["lds_block"],
+                    "waves": int(d.get("SQ_WAVES", 0)),
+                    "busy_cyc": int(busy),
+                    "active_cyc": int(d.get("GRBM_GUI_ACTIVE", 0)),
+                    "valu": int(valu),
+                    "vmem": int(vmem),
+                    "lds_inst": int(lds),
+                    "lds_wait": int(ldsw),
+                    # derived ratios (formulas): stall fraction, LDS/VALU mix, VMEM/VALU mix, L2 hit
+                    "lds_wait_per_busy": round(ldsw / busy, 4) if busy else 0.0,
+                    "lds_per_valu": round(lds / valu, 4) if valu else 0.0,
+                    "vmem_per_valu": round(vmem / valu, 4) if valu else 0.0,
+                    "l2_hit_pct": round(hit / (hit + miss) * 100, 1) if (hit + miss) else 0.0,
+                }
+            )
+    out = os.path.join(_HERE, "dsv3_a4w4_pmc_summary.csv")
+    with open(out, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"wrote {out} ({len(rows)} rows)")
+
+
+if __name__ == "__main__":
+    main()
