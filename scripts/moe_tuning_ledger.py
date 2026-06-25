@@ -25,7 +25,7 @@ import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -242,6 +242,8 @@ class CampaignVerdict:
     small_wins: List[Tuple] = field(default_factory=list)
     missing_candidate_points: List[Tuple] = field(default_factory=list)
     incomplete_points: List[Tuple] = field(default_factory=list)
+    # Documented reference_invalid rows (issue #643) excluded from coverage/gate.
+    quarantined: List[Tuple] = field(default_factory=list)
     # Strict correctness + AOT-cache hard gate over the candidate CSV
     # (``selected_candidate_gate`` output).  Populated by ``compare_csvs``; a
     # candidate that fails this gate (e.g. ``aot_status=no_aot``) can never be a
@@ -274,8 +276,94 @@ class CampaignVerdict:
         return self.pareto_clean and bool(self.large_wins or self.small_wins) and bool(self.gate.get("passed"))
 
 
-def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
-    """Full per-point Pareto comparison of a candidate vs the locked baseline.
+CONFIG_IDENTITY_FIELDS: Tuple[str, ...] = (
+    "model",
+    "model_dim",
+    "inter_dim",
+    "experts",
+    "topk",
+    "dtype",
+    "act",
+    "token",
+    "tile_m1",
+    "tile_n1",
+    "tile_k1",
+    "tile_m2",
+    "tile_n2",
+    "tile_k2",
+    "persist_m1",
+    "persist_m2",
+    "xcd_swizzle1",
+    "xcd_swizzle2",
+    "stage2_lds_load_bytes",
+    "stage2_a_prefetch_schedule",
+    "stage2_a_prefetch_scope",
+    "k_batch1",
+    "waves_per_eu2",
+)
+
+
+@dataclass
+class DispatchChangeVerdict:
+    """Verdict for a production dispatch-table-only change.
+
+    ``changed_keys`` are compared with timing metrics.  Every other baseline key
+    must still be present, but its no-regression proof is config identity rather
+    than timing because production dispatches the exact same kernel/config there.
+    """
+
+    changed_keys: Set[Tuple] = field(default_factory=set)
+    timed_points: List[PointVerdict] = field(default_factory=list)
+    unchanged_config_checked: List[Tuple] = field(default_factory=list)
+    missing_candidate_points: List[Tuple] = field(default_factory=list)
+    incomplete_changed_points: List[Tuple] = field(default_factory=list)
+    incomplete_config_points: List[Tuple] = field(default_factory=list)
+    unchanged_config_mismatches: List[Tuple] = field(default_factory=list)
+    unknown_changed_keys: List[Tuple] = field(default_factory=list)
+    any_changed_regression: bool = False
+    large_wins: List[Tuple] = field(default_factory=list)
+    small_wins: List[Tuple] = field(default_factory=list)
+    quarantined: List[Tuple] = field(default_factory=list)
+    gate: dict = field(default_factory=lambda: {"passed": False, "n_rows": 0, "violations": []})
+
+    @property
+    def coverage_complete(self) -> bool:
+        return (
+            not self.missing_candidate_points
+            and not self.incomplete_changed_points
+            and not self.incomplete_config_points
+            and not self.unknown_changed_keys
+        )
+
+    @property
+    def config_identity_clean(self) -> bool:
+        return not self.incomplete_config_points and not self.unchanged_config_mismatches
+
+    @property
+    def timed_clean(self) -> bool:
+        return not self.any_changed_regression and not self.incomplete_changed_points
+
+    @property
+    def claimable_dispatch_win(self) -> bool:
+        return (
+            self.coverage_complete
+            and self.config_identity_clean
+            and self.timed_clean
+            and bool(self.large_wins or self.small_wins)
+            and bool(self.gate.get("passed"))
+        )
+
+
+def _norm_cell(row: dict, field_name: str) -> str:
+    return (row.get(field_name) or "").strip()
+
+
+def _missing_config_fields(row: dict, fields: Tuple[str, ...]) -> List[str]:
+    return [f for f in fields if f not in row or _norm_cell(row, f) == ""]
+
+
+def compare_csvs(baseline_csv: str, candidate_csv: str, quarantine_keys: Optional[set] = None) -> CampaignVerdict:
+    """Full per-point Pareto comparison of a candidate vs a baseline.
 
     Iterates the COMPLETE baseline key set so a candidate cannot pass by omitting
     a regressing/uncovered point.  A point with a missing candidate row, or whose
@@ -289,17 +377,33 @@ def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     the gate (``aot_status=checked`` + correctness + ``logits_diff<=0.01``).  Do
     NOT promote a candidate from ``pareto_clean`` + win lists alone -- a ``no_aot``
     candidate can be pareto_clean with wins yet must not be claimable.
+
+    ``quarantine_keys`` (opt-in) excludes documented ``reference_invalid`` rows
+    (issue #643 tiny-token reference-nonfinite harness artifact) from BOTH the gate
+    and the regression/coverage scan, recording them on ``cv.quarantined``.  A
+    quarantined key is only honored if its candidate row's ``error_category`` is
+    ``reference_invalid`` (enforced in ``selected_candidate_gate``); the comparison
+    side additionally requires the row's metrics be non-comparable (it skips them
+    from regression so a nan-latency artifact cannot count as a regression OR a
+    win).  Baseline MUST be a fresh paired baseline (same code state/session), not
+    the stale locked snapshot, when cross-session drift is present.
     """
     base = read_point_csv(baseline_csv)
     cand = read_point_csv(candidate_csv)
+    quarantine_keys = quarantine_keys or set()
     cv = CampaignVerdict()
-    cv.gate = selected_candidate_gate(candidate_csv)
+    cv.gate = selected_candidate_gate(candidate_csv, quarantine_keys=quarantine_keys)
     for key, b_row in base.items():
         token = int(float(b_row.get("token") or 0))
         c_row = cand.get(key)
         if c_row is None:
             cv.missing_candidate_points.append(key)
             cv.points.append(PointVerdict(key=key, token=token, note="missing_candidate_point"))
+            continue
+        # Quarantined reference-invalid rows are excluded from coverage/regression.
+        if key in quarantine_keys and (c_row.get("error_category") or "").strip() == "reference_invalid":
+            cv.quarantined.append(key)
+            cv.points.append(PointVerdict(key=key, token=token, note="quarantined:reference_invalid"))
             continue
         missing = _row_missing_fields(c_row, _required_fields_for_point(token))
         if missing:
@@ -317,7 +421,75 @@ def compare_csvs(baseline_csv: str, candidate_csv: str) -> CampaignVerdict:
     return cv
 
 
-def selected_candidate_gate(candidate_csv: str, max_logits_diff: float = 0.01) -> dict:
+def compare_csvs_dispatch_change(
+    baseline_csv: str,
+    candidate_csv: str,
+    changed_keys: Set[Tuple],
+    quarantine_keys: Optional[set] = None,
+    config_fields: Tuple[str, ...] = CONFIG_IDENTITY_FIELDS,
+) -> DispatchChangeVerdict:
+    """Compare a fresh paired baseline and candidate for a dispatch-table-only change.
+
+    This is intentionally narrower than ``compare_csvs``.  It is for the case
+    where the production edit changes dispatch/config selection only for an
+    explicit allow-list of keys.  The allow-listed keys still use the locked
+    timing no-regression/win gates.  All other rows must prove that production
+    selects the same kernel/config by matching every required config-identity
+    column; their noisy fresh timing deltas are not used for the claim.
+    """
+    base = read_point_csv(baseline_csv)
+    cand = read_point_csv(candidate_csv)
+    changed_keys = set(changed_keys)
+    quarantine_keys = quarantine_keys or set()
+    cv = DispatchChangeVerdict(changed_keys=changed_keys)
+    cv.gate = selected_candidate_gate(candidate_csv, quarantine_keys=quarantine_keys)
+    cv.unknown_changed_keys = sorted(changed_keys - set(base))
+
+    for key, b_row in base.items():
+        token = int(float(b_row.get("token") or 0))
+        c_row = cand.get(key)
+        if c_row is None:
+            cv.missing_candidate_points.append(key)
+            continue
+        if key in quarantine_keys and (c_row.get("error_category") or "").strip() == "reference_invalid":
+            cv.quarantined.append(key)
+            continue
+
+        if key in changed_keys:
+            missing = _row_missing_fields(c_row, _required_fields_for_point(token))
+            if missing:
+                cv.incomplete_changed_points.append((key, tuple(missing)))
+                continue
+            pv = compare_point(b_row, c_row)
+            cv.timed_points.append(pv)
+            if pv.kernel_path_regression or pv.e2e_regression:
+                cv.any_changed_regression = True
+            if pv.large_shape_win:
+                cv.large_wins.append(key)
+            if pv.small_token_win:
+                cv.small_wins.append(key)
+            continue
+
+        missing_base = _missing_config_fields(b_row, config_fields)
+        missing_cand = _missing_config_fields(c_row, config_fields)
+        if missing_base or missing_cand:
+            cv.incomplete_config_points.append((key, tuple(missing_base), tuple(missing_cand)))
+            continue
+        mismatches = [
+            (field_name, _norm_cell(b_row, field_name), _norm_cell(c_row, field_name))
+            for field_name in config_fields
+            if _norm_cell(b_row, field_name) != _norm_cell(c_row, field_name)
+        ]
+        if mismatches:
+            cv.unchanged_config_mismatches.append((key, tuple(mismatches)))
+        else:
+            cv.unchanged_config_checked.append(key)
+    return cv
+
+
+def selected_candidate_gate(
+    candidate_csv: str, max_logits_diff: float = 0.01, quarantine_keys: Optional[set] = None
+) -> dict:
     """Hard gate a candidate CSV before it can be promoted to a win.
 
     A selected candidate must clear the strict correctness + AOT-cache hard gate on
@@ -328,12 +500,24 @@ def selected_candidate_gate(candidate_csv: str, max_logits_diff: float = 0.01) -
     NEUTRAL repeatability/diagnostic artifacts but can never be promoted to a win,
     so they fail this gate.
 
-    Returns ``{"passed": bool, "n_rows": int, "violations": [(key, reason), ...]}``.
-    ``passed`` is False if there are zero rows (nothing to promote) or any violation.
+    ``quarantine_keys`` is an OPT-IN allow-list of ``(model, dtype, act, token)``
+    keys that are excluded from the gate ONLY when their ``error_category`` is
+    ``reference_invalid`` (the torch reference itself was non-finite -- a known
+    tiny-token CK-path harness artifact, issue #643, unrelated to the tuned lever).
+    A quarantined key whose category is anything else (a real correctness failure)
+    is still a violation -- quarantine can never hide a genuine kernel mismatch.
+
+    Returns ``{"passed", "n_rows", "violations", "quarantined"}``.
     """
     rows = read_point_csv(candidate_csv)
+    quarantine_keys = quarantine_keys or set()
     violations: List[Tuple] = []
+    quarantined: List[Tuple] = []
     for key, row in rows.items():
+        cat = (row.get("error_category") or "").strip()
+        if key in quarantine_keys and cat == "reference_invalid":
+            quarantined.append((key, "reference_invalid (issue #643 tiny-token reference nonfinite; quarantined)"))
+            continue
         aot = (row.get("aot_status") or "").strip()
         if aot != "checked":
             violations.append((key, f"aot_status={aot or 'missing'} (need 'checked')"))
@@ -345,7 +529,12 @@ def selected_candidate_gate(candidate_csv: str, max_logits_diff: float = 0.01) -
             violations.append((key, "logits_diff missing"))
         elif ld > max_logits_diff:
             violations.append((key, f"logits_diff={ld} > {max_logits_diff}"))
-    return {"passed": bool(rows) and not violations, "n_rows": len(rows), "violations": violations}
+    return {
+        "passed": bool(rows) and not violations,
+        "n_rows": len(rows),
+        "violations": violations,
+        "quarantined": quarantined,
+    }
 
 
 def repeatability_check(csv_a: str, csv_b: str) -> dict:
@@ -878,7 +1067,12 @@ def scan_candidate_csv_freshness(
             commit = (row.get("commit") or "").strip()
             key = (row.get("model"), row.get("dtype"), row.get("act"), row.get("token"))
             if commit == baseline_commit or (short_base and commit[:12] == short_base):
-                offenders.append((*key, f"row carries locked-baseline commit {short_base} (copied baseline row, not a fresh measurement)"))
+                offenders.append(
+                    (
+                        *key,
+                        f"row carries locked-baseline commit {short_base} (copied baseline row, not a fresh measurement)",
+                    )
+                )
             elif not commit:
                 offenders.append((*key, "row has empty commit (no provenance)"))
     return offenders
@@ -892,8 +1086,10 @@ __all__ = [
     "Attempt",
     "append_attempt",
     "read_point_csv",
+    "CONFIG_IDENTITY_FIELDS",
     "compare_point",
     "compare_csvs",
+    "compare_csvs_dispatch_change",
     "selected_candidate_gate",
     "scan_replay_consistency",
     "scan_duplicate_rejected_candidates",
@@ -907,4 +1103,5 @@ __all__ = [
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
+    "DispatchChangeVerdict",
 ]

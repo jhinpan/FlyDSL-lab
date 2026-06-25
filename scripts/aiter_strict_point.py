@@ -164,13 +164,28 @@ def main(argv=None) -> int:
             result.update({"error": "skipped_or_none", "error_category": "skipped", "correctness_pass": False})
         else:
             ld = float(ret["logits_diff"])
+            import math as _math
+
+            # Distinguish a non-finite logits_diff (the torch REFERENCE itself
+            # overflowed to nan/inf -- a known tiny-token CK-path harness artifact,
+            # issue #643) from a real correctness failure.  A non-finite reference
+            # is NOT correctness evidence either way: correctness_pass stays False
+            # (fail-closed, never a silent pass) but the category is recorded as
+            # ``reference_invalid`` so the ledger can quarantine it distinctly from a
+            # genuine kernel mismatch.
+            if not _math.isfinite(ld):
+                cat = "reference_invalid"
+            elif ld <= 0.01:
+                cat = ""
+            else:
+                cat = "correctness"
             result.update(
                 {
                     "e2e_us": e2e_dist["median"] if e2e_dist["median"] is not None else float(ret["us"]),
                     "e2e_us_p95": e2e_dist["p95"],
                     "logits_diff": ld,
-                    "correctness_pass": ld <= 0.01,
-                    "error_category": "" if ld <= 0.01 else "correctness",
+                    "correctness_pass": _math.isfinite(ld) and ld <= 0.01,
+                    "error_category": cat,
                 }
             )
     except Exception as e:  # AOT miss, strict assertion, or runtime error.
