@@ -2439,6 +2439,7 @@ def compile_mixed_moe_gemm2(
     b_nt: int = 2,
     xcd_swizzle: int = 0,
     stage2_lds_load_bytes: int = 16,
+    stage2_a_prefetch_schedule: str = "baseline",
 ):
     """Compile stage2 kernel (`moe_gemm2`) and return the compiled executable.
 
@@ -2631,6 +2632,10 @@ def compile_mixed_moe_gemm2(
         _cu_num = 0
     if stage2_lds_load_bytes not in (8, 16):
         raise ValueError(f"stage2_lds_load_bytes must be 8 or 16, got {stage2_lds_load_bytes}")
+    if stage2_a_prefetch_schedule not in ("baseline", "early"):
+        raise ValueError(
+            f"stage2_a_prefetch_schedule must be 'baseline' or 'early', got {stage2_a_prefetch_schedule!r}"
+        )
     _sbm_tag = "" if _sort_block_m == tile_m else f"_sbm{_sort_block_m}"
     _pm_tag = f"_persist_cu{_cu_num}" if _persistent else f"_pm{persist_m}"
     _xcd_tag = f"_xcd{xcd_swizzle}" if xcd_swizzle > 0 else ""
@@ -2639,10 +2644,14 @@ def compile_mixed_moe_gemm2(
     # (same XOR16 coords, same a0/a1 halves) -- it only changes the LDS load
     # instruction shape, targeting the small-token stage2 LDS-wait bottleneck.
     _ldsld_tag = "" if stage2_lds_load_bytes == 16 else f"_ldsld{stage2_lds_load_bytes}"
+    # Stage2 A-prefetch instruction-SCHEDULE hint (data position is unchanged --
+    # the A LDS-read prefetch is already hoisted right after the barrier; "early"
+    # only biases the in-loop scheduler to issue the DS reads ahead of MFMA).
+    _aps_tag = "" if stage2_a_prefetch_schedule == "baseline" else f"_aps{stage2_a_prefetch_schedule}"
     module_name = (
         f"mfma_moe2_a{a_dtype}_w{b_dtype}_{out_s}_{epilog_tag}"
         f"_t{tile_m}x{tile_n}x{tile_k}"
-        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}{_ldsld_tag}"
+        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}{_ldsld_tag}{_aps_tag}"
     ).replace("-", "_")
     # -- LDS sizing (pure Python; no MLIR Context needed) ---------------------
     # Ping-pong A2 tiles via separate allocators (like stage1).
@@ -3548,8 +3557,19 @@ def compile_mixed_moe_gemm2(
 
                 rocdl.sched_barrier(0)
 
+                _aps_early = stage2_a_prefetch_schedule == "early"
+
                 def hot_loop_scheduler():
-                    rocdl.sched_barrier(0)
+                    if const_expr(_aps_early):
+                        # "early" A-prefetch schedule: bias the in-loop instruction
+                        # scheduler to issue the A LDS-reads (DS reads, the hoisted
+                        # a*_prefetch loads) ahead of the MFMA group, targeting the
+                        # small-token stage2 LDS-wait stall.  Pure scheduling hint --
+                        # data/order of results is unchanged.
+                        rocdl.sched_dsrd(2)
+                        rocdl.sched_mfma(1)
+                    else:
+                        rocdl.sched_barrier(0)
 
                 def _k_shift_bits(k_py):
                     if const_expr(pack_K >= _scale_pack_k):

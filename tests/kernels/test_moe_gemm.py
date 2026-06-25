@@ -945,6 +945,7 @@ def run_moe_stage2(
     persist_m: int = 4,
     xcd_swizzle: int = 0,
     stage2_lds_load_bytes: int = 16,
+    stage2_a_prefetch_schedule: str = "baseline",
 ):
     """MoE stage2 (gemm2): out2[t] = sum_{slot} ( out1[t,slot] @ W2[expert]^T ) with optional routed weight."""
 
@@ -1337,6 +1338,7 @@ def run_moe_stage2(
             persist_m=persist_m,
             xcd_swizzle=xcd_swizzle,
             stage2_lds_load_bytes=stage2_lds_load_bytes,
+            stage2_a_prefetch_schedule=stage2_a_prefetch_schedule,
         )
         bias_dummy = torch.empty((0,), device=device, dtype=torch.float32)
 
@@ -1836,6 +1838,7 @@ def test_moe_gemm_2stage(
     xcd_swizzle1: int = 0,
     xcd_swizzle2: int = 0,
     stage2_lds_load_bytes: int = 16,
+    stage2_a_prefetch_schedule: str = "baseline",
 ):
     """Single 2-stage test: gemm1 -> quantize -> gemm2, with routing built once.
 
@@ -2003,6 +2006,7 @@ def test_moe_gemm_2stage(
         persist_m=persist_m2,
         xcd_swizzle=xcd_swizzle2,
         stage2_lds_load_bytes=stage2_lds_load_bytes,
+        stage2_a_prefetch_schedule=stage2_a_prefetch_schedule,
     )
 
 
@@ -2535,6 +2539,12 @@ if __name__ == "__main__":
         default=16,
         help="Stage2 A-from-LDS load width: 16 (dwordx4) or 8 (2x dwordx2).",
     )
+    parser.add_argument(
+        "--stage2_a_prefetch_schedule",
+        type=str,
+        default="baseline",
+        help="Stage2 A-prefetch in-loop schedule hint: 'baseline' or 'early' (bias DS reads ahead of MFMA).",
+    )
 
     # Sorting / comparison knobs
     parser.add_argument(
@@ -2668,6 +2678,7 @@ if __name__ == "__main__":
             xcd_swizzle1=int(args.xcd_swizzle1),
             xcd_swizzle2=int(args.xcd_swizzle2),
             stage2_lds_load_bytes=int(args.stage2_lds_load_bytes),
+            stage2_a_prefetch_schedule=str(args.stage2_a_prefetch_schedule),
         )
 
     # Run 2-stage (gemm1 -> quantize -> gemm2) aiter-style test/benchmark.

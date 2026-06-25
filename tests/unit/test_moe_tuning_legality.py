@@ -298,6 +298,20 @@ def test_stage2_lds_load_bytes_legality():
     assert check_tile_config(stage=1, **base, stage2_lds_load_bytes=4).legal
 
 
+def test_stage2_a_prefetch_schedule_legality():
+    base = dict(model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=256, a_dtype="fp4")
+    # Default ("baseline") and "early" are legal on stage2.
+    assert check_tile_config(stage=2, **base).legal
+    assert check_tile_config(stage=2, **base, stage2_a_prefetch_schedule="baseline").legal
+    assert check_tile_config(stage=2, **base, stage2_a_prefetch_schedule="early").legal
+    # Any other value is rejected on stage2.
+    for bad in ("late", "", "EARLY", "0"):
+        r = check_tile_config(stage=2, **base, stage2_a_prefetch_schedule=bad)
+        assert not r.legal and r.reason == "stage2_a_prefetch_schedule_invalid", bad
+    # Stage1 ignores the stage2-only knob.
+    assert check_tile_config(stage=1, **base, stage2_a_prefetch_schedule="bogus").legal
+
+
 def test_rejects_stage1_fp4_tile_k_not_256():
     # tile_k=512 passes divisibility (model_dim % 512 == 0) and fits LDS, but the
     # stage1 mixed-fp4/fp8 compile path only supports tile_k=256 (tile_k>256 hits a

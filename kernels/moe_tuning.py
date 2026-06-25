@@ -468,6 +468,7 @@ def check_tile_config(
     persist_m: Optional[int] = None,
     xcd_swizzle: int = 0,
     stage2_lds_load_bytes: int = 16,
+    stage2_a_prefetch_schedule: str = "baseline",
     gpu_arch: str = "gfx950",
 ) -> TileCheck:
     """Check whether a single tile candidate is legal for ``stage`` (1 or 2).
@@ -502,6 +503,7 @@ def check_tile_config(
         "persist_m": eff_persist_m,
         "xcd_swizzle": xcd_swizzle,
         "stage2_lds_load_bytes": stage2_lds_load_bytes,
+        "stage2_a_prefetch_schedule": stage2_a_prefetch_schedule,
         "gpu_arch": gpu_arch,
     }
     if a_dtype not in _A_ELEM_BYTES:
@@ -514,6 +516,16 @@ def check_tile_config(
             2,
             "stage2_lds_load_bytes_invalid",
             f"stage2_lds_load_bytes={stage2_lds_load_bytes} not in {{8,16}}",
+            params=params,
+        )
+
+    # Stage2-only A-prefetch schedule hint: the builder accepts only these.
+    if stage == 2 and stage2_a_prefetch_schedule not in ("baseline", "early"):
+        return TileCheck(
+            False,
+            2,
+            "stage2_a_prefetch_schedule_invalid",
+            f"stage2_a_prefetch_schedule={stage2_a_prefetch_schedule!r} not in {{'baseline','early'}}",
             params=params,
         )
 

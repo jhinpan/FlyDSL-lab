@@ -79,6 +79,7 @@ CSV_COLUMNS = [
     "xcd_swizzle1",
     "xcd_swizzle2",
     "stage2_lds_load_bytes",
+    "stage2_a_prefetch_schedule",
     # metrics (median + p95 over iters)
     "stage1_us",
     "stage2_us",
@@ -194,6 +195,7 @@ class PointRow:
     xcd_swizzle1: int = 0
     xcd_swizzle2: int = 0
     stage2_lds_load_bytes: int = 16
+    stage2_a_prefetch_schedule: str = "baseline"
     stage1_us: Optional[float] = None
     stage2_us: Optional[float] = None
     sorting_us: Optional[float] = None
@@ -246,6 +248,7 @@ class PointRow:
             "xcd_swizzle1",
             "xcd_swizzle2",
             "stage2_lds_load_bytes",
+            "stage2_a_prefetch_schedule",
             "stage1_us",
             "stage2_us",
             "sorting_us",
@@ -510,6 +513,9 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
     ):
         if overrides.get(k) is not None:
             tile[k] = int(overrides[k])
+    # String-valued knob (not int): stage2 A-prefetch schedule.
+    if overrides.get("stage2_a_prefetch_schedule") is not None:
+        tile["stage2_a_prefetch_schedule"] = str(overrides["stage2_a_prefetch_schedule"])
     if overrides.get("tile_m2") is None:
         tile["tile_m2"] = tile["tile_m1"]
     a_dtype = spec.DTYPE_ALIAS_TO_A_DTYPE[rp.dtype]
@@ -537,6 +543,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         persist_m=tile["persist_m2"],
         xcd_swizzle=tile["xcd_swizzle2"],
         stage2_lds_load_bytes=tile["stage2_lds_load_bytes"],
+        stage2_a_prefetch_schedule=tile["stage2_a_prefetch_schedule"],
     )
     if not (r1.legal and r2.legal):
         raise ValueError(f"illegal candidate tiles for {rp.model}/{rp.dtype}: s1={r1.reason} s2={r2.reason}")
@@ -813,6 +820,8 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
         str(tile.get("xcd_swizzle2", 0)),
         "--stage2_lds_load_bytes",
         str(tile.get("stage2_lds_load_bytes", 16)),
+        "--stage2_a_prefetch_schedule",
+        str(tile.get("stage2_a_prefetch_schedule", "baseline")),
         "--skip_ref",
         "true",
         "--compare_aiter_ck",
@@ -981,6 +990,7 @@ def run_point(
         xcd_swizzle1=tile.get("xcd_swizzle1", 0),
         xcd_swizzle2=tile.get("xcd_swizzle2", 0),
         stage2_lds_load_bytes=tile.get("stage2_lds_load_bytes", 16),
+        stage2_a_prefetch_schedule=tile.get("stage2_a_prefetch_schedule", "baseline"),
         flydsl_command=flydsl_command_str,
         strict_error=strict_error,
         error_category=error_category,
@@ -1038,6 +1048,7 @@ _DEFAULT_LAUNCH = {
     "xcd_swizzle1": 0,
     "xcd_swizzle2": 0,
     "stage2_lds_load_bytes": 16,
+    "stage2_a_prefetch_schedule": "baseline",
 }
 
 
@@ -1102,6 +1113,13 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "stage2-lds-load-bytes",
     ):
         ap.add_argument(f"--{_k}", type=int, default=None, help=f"candidate {_k.replace('-', '_')} override")
+    # String-valued stage2 knob (separate from the int loop above).
+    ap.add_argument(
+        "--stage2-a-prefetch-schedule",
+        type=str,
+        default=None,
+        help="candidate stage2_a_prefetch_schedule override ('baseline' or 'early')",
+    )
     args = ap.parse_args(argv)
 
     if args.mode == "list":
@@ -1139,6 +1157,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "xcd_swizzle1": args.xcd_swizzle1,
         "xcd_swizzle2": args.xcd_swizzle2,
         "stage2_lds_load_bytes": args.stage2_lds_load_bytes,
+        "stage2_a_prefetch_schedule": args.stage2_a_prefetch_schedule,
     }
 
     if args.mode == "candidate":
@@ -1191,6 +1210,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                                 "xcd_swizzle1",
                                 "xcd_swizzle2",
                                 "stage2_lds_load_bytes",
+                                "stage2_a_prefetch_schedule",
                             )
                         },
                         "reason": "no parseable kernel-path stage times emitted: the subprocess returned "
