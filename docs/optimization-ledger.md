@@ -84,6 +84,7 @@ locked baseline, more-negative = faster):
 | stage2 tile_m2=32 (decoupled, sort_block_m=64) | −3.84% / −1.92% | −2.0% / −2.9% | <10% | R20 |
 | stage2 LDS load-width=8 (2x dwordx2 vs 1x dwordx4) — first DEEPER lever | −0.11% / +0.99% | +0.17% / +0.34% | <10% | R22 |
 | stage2 A-prefetch schedule=early (DS-reads-ahead-of-MFMA hint) — second DEEPER lever | −0.06% / −0.39% | −0.34% / +0.19% | <10% | R23 |
+| stage2 A-prefetch scope=all_m (hoist ALL packed-M A LDS reads up-front) — third DEEPER lever | −0.22% / +0.69% | +0.57% / −0.19% | <10% | R24 |
 
 Scope notes (precise, not over-broad):
 - `tile_m2` was measured on the R20 candidate path with stage1 `tile_m1=64`, which
@@ -110,16 +111,27 @@ hoist covers only `mi_idx==0`); the other packed-M A LDS reads are still issued
 inline in `compute_tile`, so this is the scheduler-hint variant, NOT a full
 A-prefetch data-hoist. It is neutral (kp within ±0.4%: DS V3 −0.06/−0.39%, Kimi
 −0.34/+0.19%; stage2 −0.67..+0.10%) — far below the gate. So the *scheduler-hint*
-on the front-pack prefetch is not the fix; the full-M A-prefetch data-hoist
-(R24) and larger pipeline levers remain untried.
+on the front-pack prefetch is not the fix.
+
+R24 — stage2 full-M A-prefetch DATA-HOIST (NEGATIVE): `stage2_a_prefetch_scope=all_m`
+hoists EVERY `(k_idx, mi_idx)` A LDS pack to the top of `compute_tile` (not just
+the `mi_idx==0` front packs) — same loads, issued up-front; correctness preserved
+(durable strict-ref smoke recorded). It is neutral (kp within ±0.7%: DS V3
+−0.22/+0.69%, Kimi +0.57/−0.19%; stage2 −0.5..+1.1%) — no win. The compiler
+already schedules the front-pack prefetch well, and the residual stall is the
+LDS-wait *latency* itself, not A-load issue position.
+
+CONCLUSION (R22+R23+R24): the entire stage2 A-prefetch surface — load-shape (R22),
+in-loop scheduling (R23), and full-M data-hoist (R24) — is exhausted below-gate
+for small tokens. Breaking the LDS-wait stall requires a LARGER restructuring
+(deeper multi-buffer stage2 pipeline, `use_async_copy`, or split-K), each a
+multi-round kernel rewrite.
 
 STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win on the
-measured surface. The A-prefetch surface is NOT exhausted: R22 (load-shape) and
-R23 (scheduler hint on front packs) lost, but the full-M A-prefetch data-hoist
-and larger pipeline restructuring (multi-buffer, `use_async_copy`, split-K) are
-still untried. All measurements are replayable (committed HEAD, live idle,
-reps=3); see `docs/loop2_models/*_a4w4_small_*` and the loss rows in
-`docs/attempts.jsonl`.
+measured surface. The stage2 A-prefetch surface is now exhausted; only larger
+pipeline restructuring (multi-buffer / `use_async_copy` / split-K) remains. All
+measurements are replayable (committed HEAD, live idle, reps=3); see
+`docs/loop2_models/*_a4w4_small_*` and the loss rows in `docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 
