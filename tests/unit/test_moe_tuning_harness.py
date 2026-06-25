@@ -969,6 +969,43 @@ def test_committed_measured_attempt_tokens_present_at_commit():
     assert off == [], f"measured attempts whose recorded commit lacks a cited knob token: {off}"
 
 
+def test_scan_win_label_backed_by_claimable(tmp_path):
+    import json as _json
+
+    path = str(tmp_path / "attempts.jsonl")
+
+    def _row(result, ts, claimable=None):
+        cfg = {"tile_n2": 384}
+        if claimable is not None:
+            cfg["claimable"] = claimable
+        return {"result": result, "model": "gpt_oss", "config": cfg, "timestamp": ts}
+
+    # A win row without config.claimable=True is flagged.
+    open(path, "w").write(_json.dumps(_row("win", 1.0)) + "\n")
+    off = ledger.scan_win_label_backed_by_claimable(path)
+    assert off and off[0][0] == 1.0 and off[0][1] == "gpt_oss"
+    # A win row explicitly marked claimable is clean.
+    open(path, "w").write(_json.dumps(_row("win", 2.0, claimable=True)) + "\n")
+    assert ledger.scan_win_label_backed_by_claimable(path) == []
+    # A neutral subset-candidate row is not a win and is never flagged.
+    open(path, "w").write(_json.dumps(_row("neutral", 3.0)) + "\n")
+    assert ledger.scan_win_label_backed_by_claimable(path) == []
+    # A superseded (relabeled) win row is not flagged.
+    rec = _row("win", 4.0)
+    rec["superseded_by"] = 5.0
+    open(path, "w").write(_json.dumps(rec) + "\n")
+    assert ledger.scan_win_label_backed_by_claimable(path) == []
+
+
+def test_committed_win_labels_backed_by_claimable():
+    """No active committed result:win row may exist without a claimable-win backing."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    off = ledger.scan_win_label_backed_by_claimable(attempts)
+    assert off == [], f"active win rows not backed by claimable evidence: {off}"
+
+
 def test_row_missing_kernel_path():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")

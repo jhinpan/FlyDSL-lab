@@ -695,6 +695,39 @@ def scan_measured_attempt_tokens_present_at_commit(
     return offenders
 
 
+def scan_win_label_backed_by_claimable(path: str = ATTEMPTS_JSONL) -> List[Tuple]:
+    """Find active ``result:"win"`` rows not backed by a claimable-win marker.
+
+    ``result:"win"`` is the strongest label and must mean a promotable win that
+    passed the full comparator (``compare_csvs(...).claimable_win``): full-grid
+    Pareto coverage, no regression, AND the strict correctness + AOT-checked
+    ``selected_candidate_gate``.  A subset-clean candidate (e.g. a single
+    large-bucket MFU improvement measured with ``--no-e2e``) is NOT a win and must
+    be recorded as ``result:"neutral"`` with a "subset candidate, not claimable"
+    note.  To make the strong label self-certifying, an active ``result:"win"``
+    row MUST carry ``config.claimable == True`` (set only by a promotion run that
+    verified ``claimable_win``).  This scan flags any active ``win`` row lacking
+    that marker, so subset evidence can never silently masquerade as a claimable
+    win.  Returns ``(timestamp, model, reason)`` per offender (empty == clean).
+    """
+    if not os.path.exists(path):
+        return []
+    offenders: List[Tuple] = []
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if rec.get("result") != "win" or "superseded_by" in rec:
+                continue
+            if (rec.get("config") or {}).get("claimable") is not True:
+                offenders.append(
+                    (rec.get("timestamp"), rec.get("model"), "win row missing config.claimable=True backing")
+                )
+    return offenders
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
@@ -711,6 +744,7 @@ __all__ = [
     "scan_attempt_command_paths",
     "scan_rejection_reason_present_at_commit",
     "scan_measured_attempt_tokens_present_at_commit",
+    "scan_win_label_backed_by_claimable",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
