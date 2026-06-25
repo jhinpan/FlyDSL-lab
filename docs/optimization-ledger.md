@@ -140,26 +140,35 @@ as the next AC-4 lever; it is now threaded (k_batch1 through the harness + the
 fp4 `compile_mixed_moe_gemm1` call + legality, legal DS/Kimi set {2,4,7,14,28}).
 But the strict-ref correctness smoke fails hard: `--k_batch1 2` on DS V3 token 32
 gives logits_diff=1.0, Max Diff inf/nan, and the stage1-only path also mismatches
-the reference. Root cause (the bug Codex flagged): the split-K builder forces
-`out_dtype="bf16"` and emits a raw-f32 gate/up-partials + host-silu-reduction
-contract that is incoherent with the fp4 MXFP4 f16-quant 2-stage flow (`out_s` /
-`out_is_bf16` / `out_elem()` are computed before the split-K override). Per the
-correctness gate, NO perf is recorded for the incorrect kernel; the lever is
-recorded as a precise fail-closed correctness rejection in `docs/attempts.jsonl`.
-A correct fp4 split-K requires a multi-round fix to the split-K output contract
-(integrate raw-partials + reduction + requant into the fused 2-stage flow), the
-same multi-round-rewrite class as the remaining stage2 pipeline levers.
+the reference. Root cause (the bug Codex flagged): the split-K builder forced
+`out_dtype="bf16"` after the out-dtype metadata was derived (incoherent with the
+fp4 f32 partial buffer), and the fp4 launch wrapper didn't zero the atomic buffer
+per launch. (R26 recorded this as a correctness rejection; SUPERSEDED by R27.)
 
-STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win on the
-measured surface. The cheap/medium levers are exhausted: the stage2 A-prefetch
-surface (R22/R23/R25) is below-gate, and stage1 split-K (R26) is correctness-
-blocked for fp4 without a multi-round kernel rewrite. The only remaining AC-4
-levers (correct fp4 split-K, deeper multi-buffer stage2 pipeline, `use_async_copy`)
-are all multi-round architectural rewrites that likely exceed the remaining loop
-budget — a cost/benefit decision (invest further rewrites vs accept a documented
-no-small-token-win on the tractable surface) is reasonable to surface to the user.
-All measurements/rejections are replayable; see `docs/loop2_models/*_a4w4_small_*`
-and the loss/rejected rows in `docs/attempts.jsonl`.
+R27 — fp4 split-K FIXED and MEASURED (negative). The output contract is now
+coherent: split-K sets an f32 partial-output contract (out_is_f32, out_elem_bytes=4,
+f32 LDS-out/`_frag_elem`/atomic-fadd, direct f32 store with no illegal f32->f32
+trunc) recomputed before the metadata is consumed; the fp4 `run_moe_stage1` launch
+zeros the buffer per call. Strict-ref now PASSES (was logits_diff=1.0). MEASURED
+the legal `k_batch1 ∈ {2,4,7,14,28}` for DS V3 + Kimi tokens 32/64: split-K
+REGRESSES the small-token combined kernel-path at every value, monotonically worse
+as k_batch grows (DS V3 kb=2 +9.4%/+7.0% → kb=28 +84%/+96%; Kimi kb=2 +9.3%/-0.3%
+→ kb=28 +87%/+74%). The stage1 atomic-fadd overhead + host silu-reduction dominate
+at skinny M. No win. Split-K is a large-K/large-M lever, not a small-token MoE
+lever — confirmed by direct correct measurement, not by assertion.
+
+STATUS: AC-4 remains **ACTIVE / not met**. EVERY in-scope AC-4 lever is now
+measured below-gate (or correctly measured as a loss): stage1 tile, stage2
+tile_n2, persist_m2 {0,1,2,4,8,16}, tile_m2, the full stage2 A-prefetch surface
+(R22/R23/R25), and now CORRECT stage1 split-K {2,4,7,14,28} (R27). The only
+remaining levers (deeper multi-buffer stage2 pipeline, `use_async_copy`) are
+multi-round architectural rewrites that exceed the remaining loop budget. With
+the split-K lever now correctly measured and lost, a cost/benefit decision
+(invest a multi-round stage2-pipeline rewrite vs accept a documented
+no-small-token-win on the tractable surface and redirect to the AC-3 GPT-OSS
+promotion) is reasonable to surface to the user. All measurements/rejections are
+replayable; see `docs/loop2_models/*_a4w4_small_*` and the loss/rejected rows in
+`docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 
