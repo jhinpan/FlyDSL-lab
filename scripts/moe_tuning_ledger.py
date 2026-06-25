@@ -496,7 +496,7 @@ _REPO_PATH_RE = _re.compile(r"(?:docs|scripts|kernels|tests)/[\w./-]+\.(?:sh|py|
 def scan_attempt_command_paths(path: str = ATTEMPTS_JSONL, repo_root: str = _REPO_ROOT) -> List[Tuple]:
     """Find attempts whose ``command`` names a repo path absent at the recorded ``commit``.
 
-    AC-7 requires branch+commit+exact-command provenance to be internally
+    Replayable provenance requires branch+commit+exact-command to be internally
     consistent: an attempt that says "run docs/.../collect.sh" at commit X is only
     replayable if that path exists in commit X.  For every non-superseded attempt
     with a ``commit``, this extracts repo-relative artifact/script paths from the
