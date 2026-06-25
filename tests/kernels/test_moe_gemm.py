@@ -937,6 +937,7 @@ def run_moe_stage2(
     scale_w2_groups_in: Optional[torch.Tensor] = None,
     scale_dtype: str = "f32",
     even_dispatch: bool = False,
+    sort_block_m: int = 0,
 ):
     """MoE stage2 (gemm2): out2[t] = sum_{slot} ( out1[t,slot] @ W2[expert]^T ) with optional routed weight."""
 
@@ -1285,6 +1286,7 @@ def run_moe_stage2(
             b_dtype="fp4",
             out_dtype="f16",
             accumulate=fp4_accumulate,
+            sort_block_m=sort_block_m,
         )
         bias_dummy = torch.empty((0,), device=device, dtype=torch.float32)
 
@@ -1778,6 +1780,7 @@ def test_moe_gemm_2stage(
     init_scale: float = 1.0,
     skip_ref: bool = False,
     w_fp4_kernel: bool = False,
+    tile_m2: Optional[int] = None,
 ):
     """Single 2-stage test: gemm1 -> quantize -> gemm2, with routing built once.
 
@@ -1906,6 +1909,8 @@ def test_moe_gemm_2stage(
             out1_fp32 = out1_fp32 * smooth_scale2[topk_ids.to(torch.int64)]
         a2_q, a2_scale = pertoken_quant(out1_fp32, quant_dtype=torch.int8)
 
+    _tile_m2 = tile_m2 if tile_m2 is not None else tile_m
+    _sort_block_m2 = tile_m if _tile_m2 != tile_m else 0
     _out2_fp32, _us2 = run_moe_stage2(
         tokens=tokens,
         model_dim=model_dim,
@@ -1915,7 +1920,7 @@ def test_moe_gemm_2stage(
         in_dtype=in_dtype,
         out_dtype=out_dtype,
         group_size=group_size,
-        tile_m=tile_m,
+        tile_m=_tile_m2,
         tile_n=tile_n2,
         tile_k=tile_k2,
         doweight_stage1=bool(doweight_stage1),
@@ -1937,6 +1942,7 @@ def test_moe_gemm_2stage(
         use_reduce=bool(use_reduce),
         use_valid_mask=use_valid_mask,
         test_graph=test_graph,
+        sort_block_m=_sort_block_m2,
     )
 
 
@@ -2456,6 +2462,7 @@ if __name__ == "__main__":
     parser.add_argument("--tile_m", type=int, default=32, help="Tile M / block_m (routing block size).")
     parser.add_argument("--tile_n", type=int, default=128, help="Tile N (inter dim tile).")
     parser.add_argument("--tile_k", type=int, default=256, help="Tile K (model dim tile).")
+    parser.add_argument("--tile_m2", type=int, default=None, help="Stage2 tile M / block_m; default = --tile_m.")
     parser.add_argument("--tile_n2", type=int, default=None, help="Stage2 tile N (model dim tile). Default: 2*tile_n.")
     parser.add_argument("--tile_k2", type=int, default=None, help="Stage2 tile K (inter dim tile). Default: tile_k.")
 
@@ -2542,6 +2549,7 @@ if __name__ == "__main__":
 
     tile_n2 = int(args.tile_n2) if args.tile_n2 is not None else int(args.tile_n) * 2
     tile_k2 = int(args.tile_k2) if args.tile_k2 is not None else args.tile_k
+    tile_m2 = int(args.tile_m2) if args.tile_m2 is not None else int(args.tile_m)
 
     # Determine which gemm2 modes to run.
     if args.gemm2_mode == "both":
@@ -2584,6 +2592,7 @@ if __name__ == "__main__":
             use_reduce=use_reduce,
             use_valid_mask=bool(args.use_valid_mask),
             test_graph=bool(args.test_graph),
+            tile_m2=tile_m2,
         )
 
     # Run 2-stage (gemm1 -> quantize -> gemm2) aiter-style test/benchmark.

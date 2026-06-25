@@ -480,9 +480,11 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
     from kernels import moe_tuning as _mt
 
     tile = dict(default_tile_for(rp))
-    for k in ("tile_m1", "tile_n1", "tile_k1", "tile_n2", "tile_k2"):
+    for k in ("tile_m1", "tile_n1", "tile_k1", "tile_m2", "tile_n2", "tile_k2"):
         if overrides.get(k) is not None:
             tile[k] = int(overrides[k])
+    if overrides.get("tile_m2") is None:
+        tile["tile_m2"] = tile["tile_m1"]
     a_dtype = spec.DTYPE_ALIAS_TO_A_DTYPE[rp.dtype]
     r1 = _mt.check_tile_config(
         stage=1,
@@ -493,14 +495,16 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         tile_k=tile["tile_k1"],
         a_dtype=a_dtype,
     )
+    sort_block_m2 = tile["tile_m1"] if tile["tile_m2"] != tile["tile_m1"] else 0
     r2 = _mt.check_tile_config(
         stage=2,
         model_dim=rp.model_dim,
         inter_dim=rp.inter_dim,
-        tile_m=tile["tile_m1"],
+        tile_m=tile["tile_m2"],
         tile_n=tile["tile_n2"],
         tile_k=tile["tile_k2"],
         a_dtype=a_dtype,
+        sort_block_m=sort_block_m2,
     )
     if not (r1.legal and r2.legal):
         raise ValueError(f"illegal candidate tiles for {rp.model}/{rp.dtype}: s1={r1.reason} s2={r2.reason}")
@@ -757,6 +761,8 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
         str(spec.BENCH_ITERS),
         "--tile_m",
         str(tile["tile_m1"]),
+        "--tile_m2",
+        str(tile["tile_m2"]),
         "--tile_n",
         str(tile["tile_n1"]),
         "--tile_k",
@@ -925,7 +931,7 @@ def run_point(
         tile_m1=tile["tile_m1"],
         tile_n1=tile["tile_n1"],
         tile_k1=tile["tile_k1"],
-        tile_m2=tile["tile_m1"],
+        tile_m2=tile["tile_m2"],
         tile_n2=tile["tile_n2"],
         tile_k2=tile["tile_k2"],
         flydsl_command=flydsl_command_str,
@@ -976,8 +982,8 @@ def row_missing_kernel_path(row: "PointRow") -> bool:
 # Default (baseline) tile config per shape: matches scripts/run_benchmark.sh.
 def default_tile_for(rp: RunPoint) -> dict:  # pragma: no cover - simple table
     if rp.model_dim == 3072:  # GPT-OSS
-        return {"tile_m1": 32, "tile_n1": 128, "tile_k1": 256, "tile_n2": 256, "tile_k2": 256}
-    return {"tile_m1": 64, "tile_n1": 256, "tile_k1": 256, "tile_n2": 256, "tile_k2": 256}
+        return {"tile_m1": 32, "tile_n1": 128, "tile_k1": 256, "tile_m2": 32, "tile_n2": 256, "tile_k2": 256}
+    return {"tile_m1": 64, "tile_n1": 256, "tile_k1": 256, "tile_m2": 64, "tile_n2": 256, "tile_k2": 256}
 
 
 def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/live
@@ -1005,7 +1011,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
     ap.add_argument("--dtype", default=None, help="restrict to one dtype alias, e.g. a4w4 (candidate mode)")
     ap.add_argument("--tokens", default=None, help="comma/space-separated token list (candidate mode)")
     ap.add_argument("--reps", type=int, default=3, help="independent subprocess reps per point")
-    for _k in ("tile-m1", "tile-n1", "tile-k1", "tile-n2", "tile-k2"):
+    for _k in ("tile-m1", "tile-n1", "tile-k1", "tile-m2", "tile-n2", "tile-k2"):
         ap.add_argument(f"--{_k}", type=int, default=None, help=f"candidate {_k.replace('-', '_')} override")
     args = ap.parse_args(argv)
 
@@ -1036,6 +1042,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "tile_m1": args.tile_m1,
         "tile_n1": args.tile_n1,
         "tile_k1": args.tile_k1,
+        "tile_m2": args.tile_m2,
         "tile_n2": args.tile_n2,
         "tile_k2": args.tile_k2,
     }
@@ -1076,7 +1083,9 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                         "act": rp.act,
                         "token": rp.token,
                         "stage": 1,
-                        "config": {k: tile.get(k) for k in ("tile_m1", "tile_n1", "tile_k1", "tile_n2", "tile_k2")},
+                        "config": {
+                            k: tile.get(k) for k in ("tile_m1", "tile_n1", "tile_k1", "tile_m2", "tile_n2", "tile_k2")
+                        },
                         "reason": "no parseable kernel-path stage times emitted (unmeasured shape; e.g. "
                         "tile_k1!=256 / tile_n1=512 harness limitation)",
                         "selection": {"model": args.model, "dtype": args.dtype, "tokens": toks},

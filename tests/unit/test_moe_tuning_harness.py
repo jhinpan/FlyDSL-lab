@@ -1582,3 +1582,40 @@ def test_prepare_candidate_run_fail_closed(tmp_path, monkeypatch):
     # (4) empty selection -> reject.
     with _pytest.raises(ValueError, match="matched no points"):
         harness.prepare_candidate_run(ov, model="nonesuch", dtype="a4w4", tokens=[16])
+
+
+def test_candidate_tile_m2_decoupled_legal():
+    """tile_m2=64 passes stage2 legality for DS V3 a4w4 even when tile_m1=256 would not."""
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    tile = harness.candidate_tile_for(rp, {"tile_m1": 256, "tile_m2": 64, "tile_n2": 256, "tile_k2": 256})
+    assert tile["tile_m2"] == 64
+    assert tile["tile_m1"] == 256
+
+
+def test_candidate_tile_m2_shared_lds_over_limit():
+    """tile_m2 follows tile_m1=256 by default and exceeds gfx950 LDS -> ValueError."""
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        harness.candidate_tile_for(rp, {"tile_m1": 256})
+
+
+def test_candidate_tile_m2_defaults_to_tile_m1():
+    """With no tile_m2 override, tile_m2 always equals tile_m1."""
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    tile = harness.candidate_tile_for(rp, {})
+    assert tile["tile_m2"] == tile["tile_m1"]
+    assert tile == harness.default_tile_for(rp)
+
+
+def test_default_tile_for_includes_tile_m2():
+    """default_tile_for includes tile_m2 == tile_m1 for all shape families."""
+    # DS-V3-like (inter_dim != 3072)
+    rp_ds = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    t_ds = harness.default_tile_for(rp_ds)
+    assert t_ds["tile_m2"] == t_ds["tile_m1"]
+    # GPT-OSS-like (model_dim == 3072)
+    rp_gpt = harness.RunPoint("gpt_oss", 3072, 8192, 64, 2, "swiglu", "a4w4", 256)
+    t_gpt = harness.default_tile_for(rp_gpt)
+    assert t_gpt["tile_m2"] == t_gpt["tile_m1"]
