@@ -71,3 +71,4 @@ python/flydsl/_mlir
 # RLCR loop3 profiling: keep text summaries + small evidence, ignore raw rocprof/ATT bundles
 docs/loop3_profiling/*/
 !docs/loop3_profiling/evidence/
+!docs/loop3_profiling/e2e_evidence/

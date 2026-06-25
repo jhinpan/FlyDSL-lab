@@ -1,0 +1,15 @@
+{
+  "description": "GPT-OSS a4w4 (model_dim=3072 inter_dim=3072 E=128 topk=4 Swiglu) strict AOT-checked e2e: production-persistent baseline vs persist_m=1 (_pm1) candidate dispatch. gfx950 MI350X, GPU0, clocks pinned 2200, warmup5 iters20.",
+  "win_definition_note": "These are the m_blocks>256 large-token rows where aiter production auto-dispatch resolves persistent (_persist_m=-1) and CANNOT select persist_m=1. The _pm1 dispatch variant makes the profiler-justified persist_m=1 reachable. All rows: aot_status=checked, logits_diff<=0.01.",
+  "rows": [
+    {"token": 8192,  "baseline_e2e_us": 1394.20, "candidate_e2e_us": 1174.76, "speedup_pct": 15.74, "baseline_p95": 1791.57, "candidate_p95": 1477.49, "logits_diff": 6.17e-06, "aot_status": "checked", "baseline_k2": "flydsl_moe2_afp4_wfp4_bf16_t128x128x256_atomic", "candidate_k2": "flydsl_moe2_afp4_wfp4_bf16_t128x128x256_atomic_pm1"},
+    {"token": 16384, "baseline_e2e_us": 2229.29, "candidate_e2e_us": 1966.45, "speedup_pct": 11.79, "baseline_p95": 2633.70, "candidate_p95": 2418.30, "logits_diff": 6.17e-06, "aot_status": "checked", "baseline_k2": "flydsl_moe2_afp4_wfp4_bf16_t64x128x256_atomic", "candidate_k2": "flydsl_moe2_afp4_wfp4_bf16_t64x128x256_atomic_pm1"},
+    {"token": 32768, "baseline_e2e_us": 4065.98, "candidate_e2e_us": 3529.92, "speedup_pct": 13.18, "baseline_p95": 4703.00, "candidate_p95": 4049.36, "logits_diff": 6.18e-06, "aot_status": "checked", "baseline_k2": "flydsl_moe2_afp4_wfp4_bf16_t64x128x256_atomic", "candidate_k2": "flydsl_moe2_afp4_wfp4_bf16_t64x128x256_atomic_pm1"}
+  ],
+  "stage2_kernel_path_us_reference": {
+    "token_8192":  {"persistent_baseline": 1041.3, "pm1_candidate": 696.6, "speedup_pct": 33.1},
+    "token_16384": {"persistent_baseline": 1949.9, "pm1_candidate": 1182.4, "speedup_pct": 39.4}
+  },
+  "dispatch_proof": "candidate CSV resolves kernelName2=..._pm1 for token 8192/16384/32768; baseline CSV resolves ..._atomic (persistent). aiter [fused_moe] 'using 2stage' log captured both.",
+  "provenance": {"gpu":"MI350X gfx950 idx0","clocks_pinned_mhz":2200,"warmup":5,"iters":20,"aot_cache_candidate":"/tmp/aiter_cand/cache_pm1","aot_cache_baseline":"/tmp/aiter_cand/cache_base","candidate_csv":"/tmp/aiter_cand/tuned_fmoe_pm1.csv","aiter_commit":"5a5a7196a"}
+}
