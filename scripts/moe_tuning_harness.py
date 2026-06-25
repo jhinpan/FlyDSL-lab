@@ -81,6 +81,7 @@ CSV_COLUMNS = [
     "stage2_lds_load_bytes",
     "stage2_a_prefetch_schedule",
     "stage2_a_prefetch_scope",
+    "k_batch1",
     # metrics (median + p95 over iters)
     "stage1_us",
     "stage2_us",
@@ -198,6 +199,7 @@ class PointRow:
     stage2_lds_load_bytes: int = 16
     stage2_a_prefetch_schedule: str = "baseline"
     stage2_a_prefetch_scope: str = "front"
+    k_batch1: int = 1
     stage1_us: Optional[float] = None
     stage2_us: Optional[float] = None
     sorting_us: Optional[float] = None
@@ -252,6 +254,7 @@ class PointRow:
             "stage2_lds_load_bytes",
             "stage2_a_prefetch_schedule",
             "stage2_a_prefetch_scope",
+            "k_batch1",
             "stage1_us",
             "stage2_us",
             "sorting_us",
@@ -513,6 +516,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         "xcd_swizzle1",
         "xcd_swizzle2",
         "stage2_lds_load_bytes",
+        "k_batch1",
     ):
         if overrides.get(k) is not None:
             tile[k] = int(overrides[k])
@@ -534,6 +538,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         a_dtype=a_dtype,
         persist_m=tile["persist_m1"],
         xcd_swizzle=tile["xcd_swizzle1"],
+        k_batch=tile["k_batch1"],
     )
     sort_block_m2 = tile["tile_m1"] if tile["tile_m2"] != tile["tile_m1"] else 0
     r2 = _mt.check_tile_config(
@@ -830,6 +835,8 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
         str(tile.get("stage2_a_prefetch_schedule", "baseline")),
         "--stage2_a_prefetch_scope",
         str(tile.get("stage2_a_prefetch_scope", "front")),
+        "--k_batch1",
+        str(tile.get("k_batch1", 1)),
         "--skip_ref",
         "true",
         "--compare_aiter_ck",
@@ -1000,6 +1007,7 @@ def run_point(
         stage2_lds_load_bytes=tile.get("stage2_lds_load_bytes", 16),
         stage2_a_prefetch_schedule=tile.get("stage2_a_prefetch_schedule", "baseline"),
         stage2_a_prefetch_scope=tile.get("stage2_a_prefetch_scope", "front"),
+        k_batch1=tile.get("k_batch1", 1),
         flydsl_command=flydsl_command_str,
         strict_error=strict_error,
         error_category=error_category,
@@ -1059,6 +1067,7 @@ _DEFAULT_LAUNCH = {
     "stage2_lds_load_bytes": 16,
     "stage2_a_prefetch_schedule": "baseline",
     "stage2_a_prefetch_scope": "front",
+    "k_batch1": 1,
 }
 
 
@@ -1121,6 +1130,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "xcd-swizzle1",
         "xcd-swizzle2",
         "stage2-lds-load-bytes",
+        "k-batch1",
     ):
         ap.add_argument(f"--{_k}", type=int, default=None, help=f"candidate {_k.replace('-', '_')} override")
     # String-valued stage2 knob (separate from the int loop above).
@@ -1175,6 +1185,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "stage2_lds_load_bytes": args.stage2_lds_load_bytes,
         "stage2_a_prefetch_schedule": args.stage2_a_prefetch_schedule,
         "stage2_a_prefetch_scope": args.stage2_a_prefetch_scope,
+        "k_batch1": args.k_batch1,
     }
 
     if args.mode == "candidate":
@@ -1229,6 +1240,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                                 "stage2_lds_load_bytes",
                                 "stage2_a_prefetch_schedule",
                                 "stage2_a_prefetch_scope",
+                                "k_batch1",
                             )
                         },
                         "reason": "no parseable kernel-path stage times emitted: the subprocess returned "

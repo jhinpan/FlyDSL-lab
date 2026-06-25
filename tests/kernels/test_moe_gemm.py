@@ -613,6 +613,7 @@ def run_moe_stage1(
             act="silu",
             persist_m=persist_m,
             xcd_swizzle=xcd_swizzle,
+            k_batch=k_batch,
         )
         bias_dummy = torch.empty((0,), device=device, dtype=torch.float32)
         # Empty placeholder: stage1 writes a sorted E8M0 scale buffer only
@@ -1842,6 +1843,7 @@ def test_moe_gemm_2stage(
     stage2_lds_load_bytes: int = 16,
     stage2_a_prefetch_schedule: str = "baseline",
     stage2_a_prefetch_scope: str = "front",
+    k_batch1: int = 1,
 ):
     """Single 2-stage test: gemm1 -> quantize -> gemm2, with routing built once.
 
@@ -1939,6 +1941,7 @@ def test_moe_gemm_2stage(
         test_graph=test_graph,
         persist_m=persist_m1,
         xcd_swizzle=xcd_swizzle1,
+        k_batch=k_batch1,
     )
 
     if in_dtype in ("fp4", "a8w4"):
@@ -2537,6 +2540,7 @@ if __name__ == "__main__":
     parser.add_argument("--persist_m2", type=int, default=4, help="Stage2 persist_m (consecutive M tiles per CTA).")
     parser.add_argument("--xcd_swizzle1", type=int, default=0, help="Stage1 XCD swizzle width (0 = off).")
     parser.add_argument("--xcd_swizzle2", type=int, default=0, help="Stage2 XCD swizzle width (0 = off).")
+    parser.add_argument("--k_batch1", type=int, default=1, help="Stage1 split-K batches (k_batch; 1 = no split-K).")
     parser.add_argument(
         "--stage2_lds_load_bytes",
         type=int,
@@ -2690,6 +2694,7 @@ if __name__ == "__main__":
             stage2_lds_load_bytes=int(args.stage2_lds_load_bytes),
             stage2_a_prefetch_schedule=str(args.stage2_a_prefetch_schedule),
             stage2_a_prefetch_scope=str(args.stage2_a_prefetch_scope),
+            k_batch1=int(args.k_batch1),
         )
 
     # Run 2-stage (gemm1 -> quantize -> gemm2) aiter-style test/benchmark.

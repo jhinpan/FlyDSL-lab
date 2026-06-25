@@ -2076,6 +2076,40 @@ def test_stage2_a_prefetch_scope_threading():
     assert "stage2_a_prefetch_scope" in harness.CSV_COLUMNS and d["stage2_a_prefetch_scope"] == "all_m"
 
 
+def test_k_batch1_threading():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    import pytest as _pytest
+
+    # default tile carries k_batch1=1 (no split-K)
+    assert harness.default_tile_for(rp)["k_batch1"] == 1
+    # legal split-K value applied (2 divides model_dim 7168 and 7168/2 % 256 == 0)
+    assert harness.candidate_tile_for(rp, {"k_batch1": 2})["k_batch1"] == 2
+    # illegal divisibility rejected pre-compile (3 does not divide 7168)
+    with _pytest.raises(ValueError):
+        harness.candidate_tile_for(rp, {"k_batch1": 3})
+    # _flydsl_cmd emits the stage1-only flag
+    tile = harness.candidate_tile_for(rp, {"k_batch1": 2})
+    cmd = harness._flydsl_cmd(rp, "0", tile)
+    assert "--k_batch1" in cmd and cmd[cmd.index("--k_batch1") + 1] == "2"
+    # CSV serializes the column (default 1)
+    prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
+    row = harness.PointRow(
+        provenance=prov,
+        command="x",
+        model="deepseek_v3",
+        model_dim=7168,
+        inter_dim=256,
+        experts=257,
+        topk=9,
+        dtype="a4w4",
+        act="silu",
+        token=32,
+        k_batch1=2,
+    )
+    d = row.to_csv_dict()
+    assert "k_batch1" in harness.CSV_COLUMNS and d["k_batch1"] == 2
+
+
 def test_flydsl_cmd_emits_launch_knob_flags():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     tile = harness.candidate_tile_for(rp, {"persist_m2": 8, "xcd_swizzle2": 2})
