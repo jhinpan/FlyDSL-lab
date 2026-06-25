@@ -74,6 +74,10 @@ CSV_COLUMNS = [
     "tile_m2",
     "tile_n2",
     "tile_k2",
+    "persist_m1",
+    "persist_m2",
+    "xcd_swizzle1",
+    "xcd_swizzle2",
     # metrics (median + p95 over iters)
     "stage1_us",
     "stage2_us",
@@ -184,6 +188,10 @@ class PointRow:
     tile_m2: int = 0
     tile_n2: int = 0
     tile_k2: int = 0
+    persist_m1: int = 1
+    persist_m2: int = 4
+    xcd_swizzle1: int = 0
+    xcd_swizzle2: int = 0
     stage1_us: Optional[float] = None
     stage2_us: Optional[float] = None
     sorting_us: Optional[float] = None
@@ -231,6 +239,10 @@ class PointRow:
             "tile_m2",
             "tile_n2",
             "tile_k2",
+            "persist_m1",
+            "persist_m2",
+            "xcd_swizzle1",
+            "xcd_swizzle2",
             "stage1_us",
             "stage2_us",
             "sorting_us",
@@ -480,7 +492,18 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
     from kernels import moe_tuning as _mt
 
     tile = dict(default_tile_for(rp))
-    for k in ("tile_m1", "tile_n1", "tile_k1", "tile_m2", "tile_n2", "tile_k2"):
+    for k in (
+        "tile_m1",
+        "tile_n1",
+        "tile_k1",
+        "tile_m2",
+        "tile_n2",
+        "tile_k2",
+        "persist_m1",
+        "persist_m2",
+        "xcd_swizzle1",
+        "xcd_swizzle2",
+    ):
         if overrides.get(k) is not None:
             tile[k] = int(overrides[k])
     if overrides.get("tile_m2") is None:
@@ -494,6 +517,8 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         tile_n=tile["tile_n1"],
         tile_k=tile["tile_k1"],
         a_dtype=a_dtype,
+        persist_m=tile["persist_m1"],
+        xcd_swizzle=tile["xcd_swizzle1"],
     )
     sort_block_m2 = tile["tile_m1"] if tile["tile_m2"] != tile["tile_m1"] else 0
     r2 = _mt.check_tile_config(
@@ -505,6 +530,8 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         tile_k=tile["tile_k2"],
         a_dtype=a_dtype,
         sort_block_m=sort_block_m2,
+        persist_m=tile["persist_m2"],
+        xcd_swizzle=tile["xcd_swizzle2"],
     )
     if not (r1.legal and r2.legal):
         raise ValueError(f"illegal candidate tiles for {rp.model}/{rp.dtype}: s1={r1.reason} s2={r2.reason}")
@@ -771,6 +798,14 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
         str(tile["tile_n2"]),
         "--tile_k2",
         str(tile["tile_k2"]),
+        "--persist_m1",
+        str(tile.get("persist_m1", 1)),
+        "--persist_m2",
+        str(tile.get("persist_m2", 4)),
+        "--xcd_swizzle1",
+        str(tile.get("xcd_swizzle1", 0)),
+        "--xcd_swizzle2",
+        str(tile.get("xcd_swizzle2", 0)),
         "--skip_ref",
         "true",
         "--compare_aiter_ck",
@@ -934,6 +969,10 @@ def run_point(
         tile_m2=tile["tile_m2"],
         tile_n2=tile["tile_n2"],
         tile_k2=tile["tile_k2"],
+        persist_m1=tile.get("persist_m1", 1),
+        persist_m2=tile.get("persist_m2", 4),
+        xcd_swizzle1=tile.get("xcd_swizzle1", 0),
+        xcd_swizzle2=tile.get("xcd_swizzle2", 0),
         flydsl_command=flydsl_command_str,
         strict_error=strict_error,
         error_category=error_category,
@@ -982,10 +1021,32 @@ def row_missing_kernel_path(row: "PointRow") -> bool:
 
 
 # Default (baseline) tile config per shape: matches scripts/run_benchmark.sh.
+# Launch-mapping knobs are source-faithful builder defaults (stage1 persist_m=1,
+# stage2 persist_m=4, both xcd_swizzle=0) so a default-tile run reproduces the
+# locked baseline.
+_DEFAULT_LAUNCH = {"persist_m1": 1, "persist_m2": 4, "xcd_swizzle1": 0, "xcd_swizzle2": 0}
+
+
 def default_tile_for(rp: RunPoint) -> dict:  # pragma: no cover - simple table
     if rp.model_dim == 3072:  # GPT-OSS
-        return {"tile_m1": 32, "tile_n1": 128, "tile_k1": 256, "tile_m2": 32, "tile_n2": 256, "tile_k2": 256}
-    return {"tile_m1": 64, "tile_n1": 256, "tile_k1": 256, "tile_m2": 64, "tile_n2": 256, "tile_k2": 256}
+        return {
+            "tile_m1": 32,
+            "tile_n1": 128,
+            "tile_k1": 256,
+            "tile_m2": 32,
+            "tile_n2": 256,
+            "tile_k2": 256,
+            **_DEFAULT_LAUNCH,
+        }
+    return {
+        "tile_m1": 64,
+        "tile_n1": 256,
+        "tile_k1": 256,
+        "tile_m2": 64,
+        "tile_n2": 256,
+        "tile_k2": 256,
+        **_DEFAULT_LAUNCH,
+    }
 
 
 def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/live
@@ -1013,7 +1074,18 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
     ap.add_argument("--dtype", default=None, help="restrict to one dtype alias, e.g. a4w4 (candidate mode)")
     ap.add_argument("--tokens", default=None, help="comma/space-separated token list (candidate mode)")
     ap.add_argument("--reps", type=int, default=3, help="independent subprocess reps per point")
-    for _k in ("tile-m1", "tile-n1", "tile-k1", "tile-m2", "tile-n2", "tile-k2"):
+    for _k in (
+        "tile-m1",
+        "tile-n1",
+        "tile-k1",
+        "tile-m2",
+        "tile-n2",
+        "tile-k2",
+        "persist-m1",
+        "persist-m2",
+        "xcd-swizzle1",
+        "xcd-swizzle2",
+    ):
         ap.add_argument(f"--{_k}", type=int, default=None, help=f"candidate {_k.replace('-', '_')} override")
     args = ap.parse_args(argv)
 
@@ -1047,6 +1119,10 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "tile_m2": args.tile_m2,
         "tile_n2": args.tile_n2,
         "tile_k2": args.tile_k2,
+        "persist_m1": args.persist_m1,
+        "persist_m2": args.persist_m2,
+        "xcd_swizzle1": args.xcd_swizzle1,
+        "xcd_swizzle2": args.xcd_swizzle2,
     }
 
     if args.mode == "candidate":
@@ -1086,7 +1162,19 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                         "token": rp.token,
                         "stage": 1,
                         "config": {
-                            k: tile.get(k) for k in ("tile_m1", "tile_n1", "tile_k1", "tile_m2", "tile_n2", "tile_k2")
+                            k: tile.get(k)
+                            for k in (
+                                "tile_m1",
+                                "tile_n1",
+                                "tile_k1",
+                                "tile_m2",
+                                "tile_n2",
+                                "tile_k2",
+                                "persist_m1",
+                                "persist_m2",
+                                "xcd_swizzle1",
+                                "xcd_swizzle2",
+                            )
                         },
                         "reason": "no parseable kernel-path stage times emitted: the subprocess returned "
                         "but compiled no stage times (legality-legal but uncompilable shape, e.g. the "

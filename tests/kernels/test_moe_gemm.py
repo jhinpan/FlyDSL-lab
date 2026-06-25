@@ -345,6 +345,8 @@ def run_moe_stage1(
     even_dispatch: bool = False,
     out_dtype: str = "f16",
     k_batch: int = 1,
+    persist_m: int = 1,
+    xcd_swizzle: int = 0,
 ):
     assert model_dim % 64 == 0
     assert model_dim % tile_k == 0
@@ -609,6 +611,8 @@ def run_moe_stage1(
             b_dtype="fp4",
             out_dtype="f16",
             act="silu",
+            persist_m=persist_m,
+            xcd_swizzle=xcd_swizzle,
         )
         bias_dummy = torch.empty((0,), device=device, dtype=torch.float32)
         # Empty placeholder: stage1 writes a sorted E8M0 scale buffer only
@@ -938,6 +942,8 @@ def run_moe_stage2(
     scale_dtype: str = "f32",
     even_dispatch: bool = False,
     sort_block_m: int = 0,
+    persist_m: int = 4,
+    xcd_swizzle: int = 0,
 ):
     """MoE stage2 (gemm2): out2[t] = sum_{slot} ( out1[t,slot] @ W2[expert]^T ) with optional routed weight."""
 
@@ -1327,6 +1333,8 @@ def run_moe_stage2(
             out_dtype="f16",
             accumulate=fp4_accumulate,
             sort_block_m=sort_block_m,
+            persist_m=persist_m,
+            xcd_swizzle=xcd_swizzle,
         )
         bias_dummy = torch.empty((0,), device=device, dtype=torch.float32)
 
@@ -1821,6 +1829,10 @@ def test_moe_gemm_2stage(
     skip_ref: bool = False,
     w_fp4_kernel: bool = False,
     tile_m2: Optional[int] = None,
+    persist_m1: int = 1,
+    persist_m2: int = 4,
+    xcd_swizzle1: int = 0,
+    xcd_swizzle2: int = 0,
 ):
     """Single 2-stage test: gemm1 -> quantize -> gemm2, with routing built once.
 
@@ -1916,6 +1928,8 @@ def test_moe_gemm_2stage(
         skip_ref=bool(skip_ref),
         w_fp4_kernel=w_fp4_kernel,
         test_graph=test_graph,
+        persist_m=persist_m1,
+        xcd_swizzle=xcd_swizzle1,
     )
 
     if in_dtype in ("fp4", "a8w4"):
@@ -1983,6 +1997,8 @@ def test_moe_gemm_2stage(
         use_valid_mask=use_valid_mask,
         test_graph=test_graph,
         sort_block_m=_sort_block_m2,
+        persist_m=persist_m2,
+        xcd_swizzle=xcd_swizzle2,
     )
 
 
@@ -2505,6 +2521,10 @@ if __name__ == "__main__":
     parser.add_argument("--tile_m2", type=int, default=None, help="Stage2 tile M / block_m; default = --tile_m.")
     parser.add_argument("--tile_n2", type=int, default=None, help="Stage2 tile N (model dim tile). Default: 2*tile_n.")
     parser.add_argument("--tile_k2", type=int, default=None, help="Stage2 tile K (inter dim tile). Default: tile_k.")
+    parser.add_argument("--persist_m1", type=int, default=1, help="Stage1 persist_m (consecutive M tiles per CTA).")
+    parser.add_argument("--persist_m2", type=int, default=4, help="Stage2 persist_m (consecutive M tiles per CTA).")
+    parser.add_argument("--xcd_swizzle1", type=int, default=0, help="Stage1 XCD swizzle width (0 = off).")
+    parser.add_argument("--xcd_swizzle2", type=int, default=0, help="Stage2 XCD swizzle width (0 = off).")
 
     # Sorting / comparison knobs
     parser.add_argument(
@@ -2633,6 +2653,10 @@ if __name__ == "__main__":
             use_valid_mask=bool(args.use_valid_mask),
             test_graph=bool(args.test_graph),
             tile_m2=tile_m2,
+            persist_m1=int(args.persist_m1),
+            persist_m2=int(args.persist_m2),
+            xcd_swizzle1=int(args.xcd_swizzle1),
+            xcd_swizzle2=int(args.xcd_swizzle2),
         )
 
     # Run 2-stage (gemm1 -> quantize -> gemm2) aiter-style test/benchmark.

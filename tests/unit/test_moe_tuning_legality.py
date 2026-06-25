@@ -264,6 +264,26 @@ def test_rejects_stage2_tile_n_not_div_64():
         ).legal, ok
 
 
+def test_launch_knob_legality():
+    base = dict(model_dim=7168, inter_dim=256, tile_m=64, tile_n=256, tile_k=256, a_dtype="fp4")
+    # Defaults (persist_m=None -> stage default) stay legal on both stages.
+    assert check_tile_config(stage=1, **base).legal
+    assert check_tile_config(stage=2, **base).legal
+    # stage1 persist_m <= 0 is rejected (no persistent-CU mode on stage1).
+    r = check_tile_config(stage=1, **base, persist_m=0)
+    assert not r.legal and r.reason == "stage1_persist_m_not_positive"
+    # stage2 persist_m <= 0 is structurally legal (persistent-CU mode).
+    assert check_tile_config(stage=2, **base, persist_m=0).legal
+    # Positive persist_m is legal on both stages.
+    assert check_tile_config(stage=1, **base, persist_m=2).legal
+    assert check_tile_config(stage=2, **base, persist_m=8).legal
+    # Negative xcd_swizzle is rejected on either stage; non-negative is legal.
+    for stg in (1, 2):
+        r = check_tile_config(stage=stg, **base, xcd_swizzle=-1)
+        assert not r.legal and r.reason == "xcd_swizzle_negative", stg
+        assert check_tile_config(stage=stg, **base, xcd_swizzle=4).legal, stg
+
+
 def test_rejects_stage1_fp4_tile_k_not_256():
     # tile_k=512 passes divisibility (model_dim % 512 == 0) and fits LDS, but the
     # stage1 mixed-fp4/fp8 compile path only supports tile_k=256 (tile_k>256 hits a

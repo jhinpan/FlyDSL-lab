@@ -1730,3 +1730,68 @@ def test_default_tile_for_includes_tile_m2():
     rp_gpt = harness.RunPoint("gpt_oss", 3072, 8192, 64, 2, "swiglu", "a4w4", 256)
     t_gpt = harness.default_tile_for(rp_gpt)
     assert t_gpt["tile_m2"] == t_gpt["tile_m1"]
+
+
+def test_default_tile_for_launch_knobs_are_source_faithful():
+    """default_tile_for carries the builder-default launch knobs so a baseline-tile
+    run reproduces the locked baseline (stage1 persist_m=1, stage2 persist_m=4,
+    both xcd_swizzle=0)."""
+    for rp in (
+        harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32),
+        harness.RunPoint("gpt_oss", 3072, 8192, 64, 2, "swiglu", "a4w4", 256),
+    ):
+        t = harness.default_tile_for(rp)
+        assert t["persist_m1"] == 1 and t["persist_m2"] == 4
+        assert t["xcd_swizzle1"] == 0 and t["xcd_swizzle2"] == 0
+
+
+def test_candidate_tile_for_launch_knob_overrides_and_legality():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 16)
+    import pytest as _pytest
+
+    # Legal launch-knob overrides applied; unspecified knobs keep source defaults.
+    t = harness.candidate_tile_for(rp, {"persist_m2": 8, "xcd_swizzle2": 4})
+    assert t["persist_m2"] == 8 and t["xcd_swizzle2"] == 4
+    assert t["persist_m1"] == 1 and t["xcd_swizzle1"] == 0
+    # stage2 persistent-CU mode (persist_m2 <= 0) is structurally legal.
+    assert harness.candidate_tile_for(rp, {"persist_m2": 0})["persist_m2"] == 0
+    # stage1 persist_m1 <= 0 is rejected pre-compile (no persistent-CU mode).
+    with _pytest.raises(ValueError, match="stage1_persist_m_not_positive"):
+        harness.candidate_tile_for(rp, {"persist_m1": 0})
+    # negative xcd_swizzle is rejected pre-compile on either stage.
+    with _pytest.raises(ValueError, match="xcd_swizzle_negative"):
+        harness.candidate_tile_for(rp, {"xcd_swizzle2": -1})
+    with _pytest.raises(ValueError, match="xcd_swizzle_negative"):
+        harness.candidate_tile_for(rp, {"xcd_swizzle1": -1})
+
+
+def test_flydsl_cmd_emits_launch_knob_flags():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    tile = harness.candidate_tile_for(rp, {"persist_m2": 8, "xcd_swizzle2": 2})
+    cmd = harness._flydsl_cmd(rp, "0", tile)
+    for flag in ("--persist_m1", "--persist_m2", "--xcd_swizzle1", "--xcd_swizzle2"):
+        assert flag in cmd
+    assert cmd[cmd.index("--persist_m2") + 1] == "8"
+    assert cmd[cmd.index("--xcd_swizzle2") + 1] == "2"
+
+
+def test_point_row_serializes_launch_knobs(tmp_path):
+    prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
+    row = harness.PointRow(
+        provenance=prov,
+        command="x",
+        model="deepseek_v3",
+        model_dim=7168,
+        inter_dim=256,
+        experts=257,
+        topk=9,
+        dtype="a4w4",
+        act="silu",
+        token=32,
+        persist_m2=8,
+        xcd_swizzle2=2,
+    )
+    d = row.to_csv_dict()
+    for col in ("persist_m1", "persist_m2", "xcd_swizzle1", "xcd_swizzle2"):
+        assert col in harness.CSV_COLUMNS and col in d
+    assert d["persist_m2"] == 8 and d["xcd_swizzle2"] == 2

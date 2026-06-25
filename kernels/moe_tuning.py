@@ -465,6 +465,8 @@ def check_tile_config(
     k_batch: int = 1,
     waves_per_eu: int = 4,
     sort_block_m: int = 0,
+    persist_m: Optional[int] = None,
+    xcd_swizzle: int = 0,
     gpu_arch: str = "gfx950",
 ) -> TileCheck:
     """Check whether a single tile candidate is legal for ``stage`` (1 or 2).
@@ -474,9 +476,17 @@ def check_tile_config(
     kernel would reject.  ``a_dtype`` is ``"fp4"`` for a4w4 and ``"fp8"`` for
     a8w4 (the activation operand); the weight operand is fp4 in both cases.
 
+    ``persist_m`` / ``xcd_swizzle`` are the stage launch-mapping knobs (default
+    ``None`` -> the builder's stage default, i.e. stage1=1 / stage2=4).  Stage1
+    requires ``persist_m >= 1`` (the builder indexes a fixed persist_m loop);
+    stage2 additionally accepts ``persist_m <= 0`` (persistent-CU mode).
+    ``xcd_swizzle`` must be ``>= 0`` on both stages (negative is an invalid
+    workgroup-swizzle width).
+
     Returns a :class:`TileCheck`; ``.legal`` is the accept/reject decision and
     ``.reason`` is a machine-readable token on rejection.
     """
+    eff_persist_m = persist_m if persist_m is not None else (1 if stage == 1 else 4)
     params = {
         "model_dim": model_dim,
         "inter_dim": inter_dim,
@@ -488,10 +498,31 @@ def check_tile_config(
         "k_batch": k_batch,
         "waves_per_eu": waves_per_eu,
         "sort_block_m": sort_block_m,
+        "persist_m": eff_persist_m,
+        "xcd_swizzle": xcd_swizzle,
         "gpu_arch": gpu_arch,
     }
     if a_dtype not in _A_ELEM_BYTES:
         return TileCheck(False, stage, "bad_a_dtype", f"a_dtype={a_dtype!r} not supported", params=params)
+
+    # Launch-mapping knob legality (both stages share xcd_swizzle>=0; stage1 also
+    # requires persist_m>=1 since the builder indexes a fixed persist_m loop).
+    if xcd_swizzle < 0:
+        return TileCheck(
+            False,
+            stage,
+            "xcd_swizzle_negative",
+            f"xcd_swizzle={xcd_swizzle} < 0 (swizzle width must be >= 0)",
+            params=params,
+        )
+    if stage == 1 and eff_persist_m <= 0:
+        return TileCheck(
+            False,
+            1,
+            "stage1_persist_m_not_positive",
+            f"persist_m={eff_persist_m} <= 0 (stage1 has no persistent-CU mode; persist_m must be >= 1)",
+            params=params,
+        )
 
     if stage == 1:
         return _check_stage1(
