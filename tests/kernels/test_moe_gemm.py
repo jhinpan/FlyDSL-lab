@@ -649,6 +649,8 @@ def run_moe_stage1(
         )
 
         def launch(o, x, w, sx, sw, st, eids, sw_sorted):
+            if _is_splitk:
+                o.zero_()
             compiled_exe(*_s1_args_fp4(o, x, w, sx, sw, st, eids, sw_sorted))
 
     else:

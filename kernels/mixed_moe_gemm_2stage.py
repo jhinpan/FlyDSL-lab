@@ -209,7 +209,17 @@ def compile_mixed_moe_gemm1(
         assert model_dim % k_batch == 0, f"model_dim={model_dim} not divisible by k_batch={k_batch}"
         assert _k_per_batch % tile_k == 0, f"K_per_batch={_k_per_batch} not divisible by tile_k={tile_k}"
 
-        out_dtype = "bf16"
+        # Split-K accumulates K-slice gate/up partials via atomic fadd into a f32
+        # partial buffer ([tokens*topk, 2*inter_dim]); host then reduces
+        # silu(gate)*up.  The output contract MUST be f32 (the caller allocates an
+        # f32 buffer and the atomic fadd needs f32).  Re-derive every out-dtype-
+        # dependent flag from this f32 contract here, BEFORE out_elem_bytes /
+        # _lds_out_elem_type / _frag_elem / CShuffle setup consume them -- the old
+        # `out_dtype="bf16"` left those at stale f16/bf16 (the R26 inf/nan bug).
+        out_dtype = "f32"
+        out_s = "f32"
+        out_is_f32 = True
+        out_is_bf16 = False
     else:
         _k_per_batch = model_dim
     _k_dim = _k_per_batch
@@ -541,7 +551,7 @@ def compile_mixed_moe_gemm1(
             base_ptr_ping = allocator_ping.get_base()
             lds_x_pong = SmemPtr(base_ptr_pong, lds_pong_offset, x_lds_elem(), shape=(_input_elems,)).get()
             lds_x_ping = SmemPtr(base_ptr_ping, lds_ping_offset, x_lds_elem(), shape=(_input_elems,)).get()
-            _lds_out_elem_type = T.f32 if _need_quant else (T.bf16 if out_is_bf16 else T.f16)
+            _lds_out_elem_type = T.f32 if (_need_quant or out_is_f32) else (T.bf16 if out_is_bf16 else T.f16)
             if const_expr(_split_lds_out and _use_cshuffle_epilog):
                 _half_out_elems = int(tile_m) * (int(tile_n) // 2)
                 lds_out = SmemPtr(
@@ -1883,7 +1893,10 @@ def compile_mixed_moe_gemm1(
                         v = vector.extract(acc[acc_idx], static_position=[ii], dynamic_position=[])
                         if const_expr(_apply_weight):
                             v = v * tw
-                        if const_expr(_need_quant):
+                        if const_expr(_need_quant or out_is_f32):
+                            # quant LDS staging and split-K f32 partials both store
+                            # the f32 accumulator directly (no truncf: out_elem() is
+                            # f32, so a trunc_f f32->f32 would be an illegal cast).
                             lds_idx = row_base_lds + col_local
                             vec1_f32 = T.vec(1, f32)
                             v1 = vector.from_elements(vec1_f32, [v])
@@ -2156,7 +2169,9 @@ def compile_mixed_moe_gemm1(
                         )
 
                 _frag_elem = (
-                    ir.F32Type.get() if _need_quant else (ir.BF16Type.get() if out_is_bf16 else ir.F16Type.get())
+                    ir.F32Type.get()
+                    if (_need_quant or out_is_f32)
+                    else (ir.BF16Type.get() if out_is_bf16 else ir.F16Type.get())
                 )
 
                 if const_expr(gate_up_interleave and not _is_splitk):

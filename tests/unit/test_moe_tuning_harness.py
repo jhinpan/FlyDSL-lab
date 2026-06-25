@@ -2076,6 +2076,25 @@ def test_stage2_a_prefetch_scope_threading():
     assert "stage2_a_prefetch_scope" in harness.CSV_COLUMNS and d["stage2_a_prefetch_scope"] == "all_m"
 
 
+def test_fp4_splitk_launch_zeros_per_launch():
+    """The fp4 stage1 split-K launch wrapper must zero the atomic accumulation
+    buffer before every compiled-kernel call (so run_perftest warmup/timed iters
+    do not accumulate repeated atomic launches). Source-level check (avoids
+    importing the GPU test module)."""
+    import re
+
+    src_path = os.path.join(_REPO_ROOT, "tests", "kernels", "test_moe_gemm.py")
+    src = open(src_path).read()
+    # The fp4 branch builds `_s1_args_fp4`; its launch() must clear o under split-K.
+    fp4_launch = re.search(
+        r"def launch\(o, x, w, sx, sw, st, eids, sw_sorted\):\s*\n\s*if _is_splitk:\s*\n\s*o\.zero_\(\)\s*\n\s*compiled_exe\(\*_s1_args_fp4\(",
+        src,
+    )
+    assert (
+        fp4_launch is not None
+    ), "fp4 split-K launch() must `o.zero_()` before each compiled_exe(_s1_args_fp4...) call"
+
+
 def test_k_batch1_threading():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     import pytest as _pytest
