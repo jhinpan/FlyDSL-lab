@@ -845,6 +845,66 @@ def test_committed_attempt_command_paths_consistent():
     assert off == [], f"attempts whose command path is missing at the recorded commit: {off}"
 
 
+def test_scan_rejection_reason_present_at_commit(tmp_path):
+    import json as _json
+    import subprocess as _sp
+
+    # Build a tiny git repo whose kernels/moe_tuning.py gains a legality guard
+    # token only in the SECOND commit; a rejection record citing that token must
+    # record the second commit, not the first.
+    repo = tmp_path / "repo"
+    (repo / "kernels").mkdir(parents=True)
+    _sp.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    _sp.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    _sp.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    guard_file = repo / "kernels" / "moe_tuning.py"
+    guard_file.write_text("def _check_stage2():\n    return True\n")
+    _sp.run(["git", "-C", str(repo), "add", "."], check=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-q", "-m", "pre-guard"], check=True)
+    pre = _sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    guard_file.write_text('def _check_stage2():\n    return "stage2_tile_n_not_div_64"\n')
+    _sp.run(["git", "-C", str(repo), "add", "."], check=True)
+    _sp.run(["git", "-C", str(repo), "commit", "-q", "-m", "add guard"], check=True)
+    post = _sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    path = str(tmp_path / "attempts.jsonl")
+
+    def _rec(commit, ts):
+        return {
+            "result": "rejected_candidate",
+            "model": "deepseek_v3",
+            "dtype": "a4w4",
+            "act": "silu",
+            "token": 32,
+            "config": {"tile_n2": 32},
+            "reason": "illegal candidate tiles: s2=stage2_tile_n_not_div_64",
+            "commit": commit,
+            "timestamp": ts,
+        }
+
+    # Clean: the cited guard exists at the recorded (post) commit.
+    open(path, "w").write(_json.dumps(_rec(post, 2.0)) + "\n")
+    assert ledger.scan_rejection_reason_present_at_commit(path, repo_root=str(repo)) == []
+    # Dirty: the recorded (pre) commit predates the guard -> flagged.
+    open(path, "w").write(_json.dumps(_rec(pre, 1.0)) + "\n")
+    off = ledger.scan_rejection_reason_present_at_commit(path, repo_root=str(repo))
+    assert off and off[0] == (1.0, "stage2_tile_n_not_div_64")
+    # A superseded dirty record is not flagged.
+    rec = _rec(pre, 1.0)
+    rec["superseded_by"] = 2.0
+    open(path, "w").write(_json.dumps(rec) + "\n")
+    assert ledger.scan_rejection_reason_present_at_commit(path, repo_root=str(repo)) == []
+
+
+def test_committed_rejection_reasons_present_at_commit():
+    """Active committed legality rejections must record a commit that contains the cited guard token."""
+    attempts = os.path.join(_REPO_ROOT, "docs", "attempts.jsonl")
+    if not os.path.exists(attempts):
+        pytest.skip("no committed attempts ledger")
+    off = ledger.scan_rejection_reason_present_at_commit(attempts)
+    assert off == [], f"active legality rejections whose recorded commit lacks the cited guard: {off}"
+
+
 def test_row_missing_kernel_path():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")

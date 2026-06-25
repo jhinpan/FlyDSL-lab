@@ -548,6 +548,72 @@ def scan_attempt_command_paths(path: str = ATTEMPTS_JSONL, repo_root: str = _REP
     return offenders
 
 
+# Legality-filter reason tokens that name a specific guard in kernels/moe_tuning.py.
+# An active rejection record citing one of these must record a commit whose
+# kernels/moe_tuning.py actually contains the token, or the rejection is not
+# reproducible by replaying the command at that commit.  Used by
+# scan_rejection_reason_present_at_commit.  Add new pre-compile legality reason
+# strings here as guards are introduced.
+_LEGALITY_REASON_TOKENS = (
+    "stage2_tile_n_not_div_64",
+    "stage1_tile_k_unsupported",
+    "inter_dim_not_div_tile_n",
+)
+_LEGALITY_FILTER_FILE = "kernels/moe_tuning.py"
+
+
+def scan_rejection_reason_present_at_commit(path: str = ATTEMPTS_JSONL, repo_root: str = _REPO_ROOT) -> List[Tuple]:
+    """Find active legality rejections whose recorded commit lacks the cited guard.
+
+    A pre-compile legality rejection claims the filter rejected the candidate for a
+    named reason (e.g. ``stage2_tile_n_not_div_64``).  That is only replayable if
+    ``kernels/moe_tuning.py`` AT THE RECORDED COMMIT actually contains the reason
+    token -- otherwise replaying the exact command at that commit cannot produce the
+    recorded reason (the guard did not exist yet).  ``scan_replay_consistency`` and
+    ``scan_attempt_command_paths`` do not catch this: the command paths exist and
+    the CSVs are absent-but-legal, yet the recorded behavior is not reproducible.
+    For every active (non-superseded) rejected-candidate record whose ``reason``
+    names a known legality token, this checks ``git show <commit>:<filter file>``
+    for that token.  Returns ``(timestamp, reason_token)`` per offender (empty ==
+    clean).
+    """
+    if not os.path.exists(path):
+        return []
+
+    def _file_at(commit: str) -> Optional[str]:
+        try:
+            r = _subprocess.run(
+                ["git", "-C", repo_root, "show", f"{commit}:{_LEGALITY_FILTER_FILE}"],
+                capture_output=True,
+                text=True,
+            )
+            return r.stdout if r.returncode == 0 else None
+        except Exception:
+            return None  # cannot check (no git) -> do not flag
+
+    offenders: List[Tuple] = []
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            rec = json.loads(ln)
+            if rec.get("result") != "rejected_candidate" or "superseded_by" in rec:
+                continue
+            commit = rec.get("commit") or ""
+            reason = rec.get("reason") or ""
+            tokens = [t for t in _LEGALITY_REASON_TOKENS if t in reason]
+            if not commit or not tokens:
+                continue
+            src = _file_at(commit)
+            if src is None:
+                continue  # cannot resolve the file at that commit -> do not flag
+            for tok in tokens:
+                if tok not in src:
+                    offenders.append((rec.get("timestamp"), tok))
+    return offenders
+
+
 __all__ = [
     "ATTEMPTS_JSONL",
     "LEDGER_MD",
@@ -562,6 +628,7 @@ __all__ = [
     "scan_duplicate_rejected_candidates",
     "scan_superseded_rejected_candidates",
     "scan_attempt_command_paths",
+    "scan_rejection_reason_present_at_commit",
     "repeatability_check",
     "PointVerdict",
     "CampaignVerdict",
