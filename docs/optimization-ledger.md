@@ -134,11 +134,32 @@ below-gate for small tokens. Breaking the LDS-wait stall requires a LARGER
 restructuring (deeper multi-buffer stage2 pipeline, `use_async_copy`, or split-K),
 each a multi-round kernel rewrite.
 
+R26 — stage1 split-K (`k_batch1`) is INCORRECT for the fp4 mixed 2-stage path
+(correctness-gate REJECTION, not a measured loss). Codex R25 named stage1 split-K
+as the next AC-4 lever; it is now threaded (k_batch1 through the harness + the
+fp4 `compile_mixed_moe_gemm1` call + legality, legal DS/Kimi set {2,4,7,14,28}).
+But the strict-ref correctness smoke fails hard: `--k_batch1 2` on DS V3 token 32
+gives logits_diff=1.0, Max Diff inf/nan, and the stage1-only path also mismatches
+the reference. Root cause (the bug Codex flagged): the split-K builder forces
+`out_dtype="bf16"` and emits a raw-f32 gate/up-partials + host-silu-reduction
+contract that is incoherent with the fp4 MXFP4 f16-quant 2-stage flow (`out_s` /
+`out_is_bf16` / `out_elem()` are computed before the split-K override). Per the
+correctness gate, NO perf is recorded for the incorrect kernel; the lever is
+recorded as a precise fail-closed correctness rejection in `docs/attempts.jsonl`.
+A correct fp4 split-K requires a multi-round fix to the split-K output contract
+(integrate raw-partials + reduction + requant into the fused 2-stage flow), the
+same multi-round-rewrite class as the remaining stage2 pipeline levers.
+
 STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win on the
-measured surface. The stage2 A-prefetch surface is now exhausted; only larger
-pipeline restructuring (multi-buffer / `use_async_copy` / split-K) remains. All
-measurements are replayable (committed HEAD, live idle, reps=3); see
-`docs/loop2_models/*_a4w4_small_*` and the loss rows in `docs/attempts.jsonl`.
+measured surface. The cheap/medium levers are exhausted: the stage2 A-prefetch
+surface (R22/R23/R25) is below-gate, and stage1 split-K (R26) is correctness-
+blocked for fp4 without a multi-round kernel rewrite. The only remaining AC-4
+levers (correct fp4 split-K, deeper multi-buffer stage2 pipeline, `use_async_copy`)
+are all multi-round architectural rewrites that likely exceed the remaining loop
+budget — a cost/benefit decision (invest further rewrites vs accept a documented
+no-small-token-win on the tractable surface) is reasonable to surface to the user.
+All measurements/rejections are replayable; see `docs/loop2_models/*_a4w4_small_*`
+and the loss/rejected rows in `docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 
