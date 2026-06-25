@@ -2440,6 +2440,7 @@ def compile_mixed_moe_gemm2(
     xcd_swizzle: int = 0,
     stage2_lds_load_bytes: int = 16,
     stage2_a_prefetch_schedule: str = "baseline",
+    stage2_a_prefetch_scope: str = "front",
 ):
     """Compile stage2 kernel (`moe_gemm2`) and return the compiled executable.
 
@@ -2636,6 +2637,8 @@ def compile_mixed_moe_gemm2(
         raise ValueError(
             f"stage2_a_prefetch_schedule must be 'baseline' or 'early', got {stage2_a_prefetch_schedule!r}"
         )
+    if stage2_a_prefetch_scope not in ("front", "all_m"):
+        raise ValueError(f"stage2_a_prefetch_scope must be 'front' or 'all_m', got {stage2_a_prefetch_scope!r}")
     _sbm_tag = "" if _sort_block_m == tile_m else f"_sbm{_sort_block_m}"
     _pm_tag = f"_persist_cu{_cu_num}" if _persistent else f"_pm{persist_m}"
     _xcd_tag = f"_xcd{xcd_swizzle}" if xcd_swizzle > 0 else ""
@@ -2648,10 +2651,14 @@ def compile_mixed_moe_gemm2(
     # the A LDS-read prefetch is already hoisted right after the barrier; "early"
     # only biases the in-loop scheduler to issue the DS reads ahead of MFMA).
     _aps_tag = "" if stage2_a_prefetch_schedule == "baseline" else f"_aps{stage2_a_prefetch_schedule}"
+    # Stage2 A-prefetch SCOPE: "front" (default, only mi_idx==0 packs hoisted) vs
+    # "all_m" (every (k_idx,mi_idx) A pack hoisted up-front in compute_tile -- same
+    # loads, issued earlier; correctness unchanged).
+    _apsc_tag = "" if stage2_a_prefetch_scope == "front" else f"_apsc{stage2_a_prefetch_scope}"
     module_name = (
         f"mfma_moe2_a{a_dtype}_w{b_dtype}_{out_s}_{epilog_tag}"
         f"_t{tile_m}x{tile_n}x{tile_k}"
-        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}{_ldsld_tag}{_aps_tag}"
+        f"_vscale_fix3{_pm_tag}{_sbm_tag}{_xcd_tag}{_ldsld_tag}{_aps_tag}{_apsc_tag}"
     ).replace("-", "_")
     # -- LDS sizing (pure Python; no MLIR Context needed) ---------------------
     # Ping-pong A2 tiles via separate allocators (like stage1).
@@ -3440,6 +3447,24 @@ def compile_mixed_moe_gemm2(
                         for _bhi_i in range_constexpr(len(_b_hi)):
                             b_tile_full[_b_split_ku + _bhi_i] = _b_hi[_bhi_i]
 
+                    # Full-M A-prefetch data-hoist (stage2_a_prefetch_scope="all_m"):
+                    # issue ALL (k_idx, mi_idx) A-pack LDS loads up-front, before the
+                    # MFMA inner loop, instead of only the mi_idx==0 front packs.  The
+                    # loads are byte-identical to the inline ones -- only their issue
+                    # position changes -- so correctness is preserved.  Consumed below.
+                    _a_hoist = {}
+                    if const_expr(_aps_all_m):
+                        for _hk in range_constexpr(ku_count):
+                            _hcol = col_offset_base + (_hk * 128) // a_elem_vec_pack
+                            for _hmi in range_constexpr(m_repeat):
+                                _hrow = row_a_lds + arith.constant(_hmi * 16, index=True)
+                                _ha0, _ha1 = lds_load_packs_k64(_hrow, _hcol, lds_buffer)
+                                if const_expr(is_f8_a):
+                                    _ha2, _ha3 = lds_load_packs_k64(_hrow, _hcol + 64, lds_buffer)
+                                    _a_hoist[(_hk, _hmi)] = (_ha0, _ha1, _ha2, _ha3)
+                                else:
+                                    _a_hoist[(_hk, _hmi)] = (_ha0, _ha1)
+
                     for k_idx in range_constexpr(ku_count):
                         ku128 = k_idx >> _pack_K_shift
                         ikxdl = k_idx & _pack_K_mask
@@ -3469,7 +3494,11 @@ def compile_mixed_moe_gemm2(
                                     mi_val = arith.constant(mi_idx * 16, index=True)
                                     curr_row_a_lds = row_a_lds + mi_val
 
-                                    if const_expr((a0_prefetch is not None) and (k_idx == 0) and (mi_idx == 0)):
+                                    if const_expr(_aps_all_m):
+                                        # Consume the up-front full-M hoist (same loads).
+                                        _hoisted = _a_hoist[(k_idx, mi_idx)]
+                                        a0, a1 = _hoisted[0], _hoisted[1]
+                                    elif const_expr((a0_prefetch is not None) and (k_idx == 0) and (mi_idx == 0)):
                                         a0, a1 = a0_prefetch
                                     elif const_expr((a1_prefetch is not None) and (k_idx == 1) and (mi_idx == 0)):
                                         a0, a1 = a1_prefetch
@@ -3477,8 +3506,11 @@ def compile_mixed_moe_gemm2(
                                         a0, a1 = lds_load_packs_k64(curr_row_a_lds, col_base0, lds_buffer)
 
                                     if const_expr(is_f8_a):
-                                        col_base1 = col_base + 64
-                                        a2, a3 = lds_load_packs_k64(curr_row_a_lds, col_base1, lds_buffer)
+                                        if const_expr(_aps_all_m):
+                                            a2, a3 = _a_hoist[(k_idx, mi_idx)][2], _a_hoist[(k_idx, mi_idx)][3]
+                                        else:
+                                            col_base1 = col_base + 64
+                                            a2, a3 = lds_load_packs_k64(curr_row_a_lds, col_base1, lds_buffer)
                                         a128 = pack_i64x4_to_i32x8(a0, a1, a2, a3)
                                     else:
                                         a128 = pack_i64x4_to_i32x8(a0, a1, c0_i64, c0_i64)
@@ -3558,6 +3590,7 @@ def compile_mixed_moe_gemm2(
                 rocdl.sched_barrier(0)
 
                 _aps_early = stage2_a_prefetch_schedule == "early"
+                _aps_all_m = stage2_a_prefetch_scope == "all_m"
 
                 def hot_loop_scheduler():
                     if const_expr(_aps_early):

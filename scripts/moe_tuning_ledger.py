@@ -640,6 +640,8 @@ _MEASURED_KNOB_TOKENS = {
     "stage2_lds_load_bytes": ("tests/kernels/test_moe_gemm.py",),
     "stage2-a-prefetch-schedule": ("scripts/moe_tuning_harness.py",),
     "stage2_a_prefetch_schedule": ("tests/kernels/test_moe_gemm.py",),
+    "stage2-a-prefetch-scope": ("scripts/moe_tuning_harness.py",),
+    "stage2_a_prefetch_scope": ("tests/kernels/test_moe_gemm.py",),
 }
 _MEASURED_RESULTS = ("win", "loss", "neutral")
 

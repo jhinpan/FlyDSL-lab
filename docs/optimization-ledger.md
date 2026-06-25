@@ -102,25 +102,24 @@ slightly worse (kp within ±1% of baseline; stage2 +0.2..+1.1%): two narrower LD
 loads add instruction overhead without reducing the LDS-wait stall, so this
 particular LDS-load-shape change is not the right deeper lever.
 
-R23 — second deeper stage2 lever (NEGATIVE): `stage2_a_prefetch_schedule=early`
+R23 — stage2 A-prefetch SCHEDULER-HINT probe (NEGATIVE): `stage2_a_prefetch_schedule=early`
 emits a `sched_dsrd(2)+sched_mfma(1)` in-loop group-barrier hint biasing the A
-LDS-reads ahead of MFMA (the A-prefetch data is already hoisted, so only the
-instruction schedule changes; correctness preserved). It is neutral (kp within
-±0.4%: DS V3 −0.06/−0.39%, Kimi −0.34/+0.19%; stage2 −0.67..+0.10%) — a tiny
-consistent DS V3 nudge, far below the gate. CONCLUSION across R22+R23: the
-small-token stage2 LDS-wait stall is NOT addressable by A-prefetch load-shape or
-in-loop scheduling alone; breaking it would require a larger pipeline/occupancy
-restructuring (deeper multi-buffer pipeline, `use_async_copy`, or split-K), which
-is a substantially bigger change than a single knob.
+LDS-reads ahead of MFMA. SCOPE OF THIS PROBE (narrowed): it only reorders
+instructions around the *existing* front-pack prefetch (the `a0_prefetch`/`a1_prefetch`
+hoist covers only `mi_idx==0`); the other packed-M A LDS reads are still issued
+inline in `compute_tile`, so this is the scheduler-hint variant, NOT a full
+A-prefetch data-hoist. It is neutral (kp within ±0.4%: DS V3 −0.06/−0.39%, Kimi
+−0.34/+0.19%; stage2 −0.67..+0.10%) — far below the gate. So the *scheduler-hint*
+on the front-pack prefetch is not the fix; the full-M A-prefetch data-hoist
+(R24) and larger pipeline levers remain untried.
 
 STATUS: AC-4 remains **ACTIVE / not met**. No gated small-token win on the
-measured surface (now including two deeper stage2 levers). AC-4 is NOT
-closed-as-infeasible — the remaining deeper levers (larger stage2 pipeline
-restructuring, `use_async_copy`, split-K) are the next candidates, each a larger
-change than the single-knob levers tried so far. All measurements are replayable
-(committed HEAD, live idle, reps=3); see `docs/loop2_models/*_a4w4_small_*` and
-the `stage2 a_prefetch_schedule` / `lds_load_bytes` / `tile_m2` / `persist_m` /
-`tile_n2` loss rows in `docs/attempts.jsonl`.
+measured surface. The A-prefetch surface is NOT exhausted: R22 (load-shape) and
+R23 (scheduler hint on front packs) lost, but the full-M A-prefetch data-hoist
+and larger pipeline restructuring (multi-buffer, `use_async_copy`, split-K) are
+still untried. All measurements are replayable (committed HEAD, live idle,
+reps=3); see `docs/loop2_models/*_a4w4_small_*` and the loss rows in
+`docs/attempts.jsonl`.
 
 ### DS V3 a4w4 tokens 32/64 — stage1 k1=256 tile sweep — NON-WINNING (kernel-path)
 

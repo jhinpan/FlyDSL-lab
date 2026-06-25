@@ -80,6 +80,7 @@ CSV_COLUMNS = [
     "xcd_swizzle2",
     "stage2_lds_load_bytes",
     "stage2_a_prefetch_schedule",
+    "stage2_a_prefetch_scope",
     # metrics (median + p95 over iters)
     "stage1_us",
     "stage2_us",
@@ -196,6 +197,7 @@ class PointRow:
     xcd_swizzle2: int = 0
     stage2_lds_load_bytes: int = 16
     stage2_a_prefetch_schedule: str = "baseline"
+    stage2_a_prefetch_scope: str = "front"
     stage1_us: Optional[float] = None
     stage2_us: Optional[float] = None
     sorting_us: Optional[float] = None
@@ -249,6 +251,7 @@ class PointRow:
             "xcd_swizzle2",
             "stage2_lds_load_bytes",
             "stage2_a_prefetch_schedule",
+            "stage2_a_prefetch_scope",
             "stage1_us",
             "stage2_us",
             "sorting_us",
@@ -516,6 +519,8 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
     # String-valued knob (not int): stage2 A-prefetch schedule.
     if overrides.get("stage2_a_prefetch_schedule") is not None:
         tile["stage2_a_prefetch_schedule"] = str(overrides["stage2_a_prefetch_schedule"])
+    if overrides.get("stage2_a_prefetch_scope") is not None:
+        tile["stage2_a_prefetch_scope"] = str(overrides["stage2_a_prefetch_scope"])
     if overrides.get("tile_m2") is None:
         tile["tile_m2"] = tile["tile_m1"]
     a_dtype = spec.DTYPE_ALIAS_TO_A_DTYPE[rp.dtype]
@@ -544,6 +549,7 @@ def candidate_tile_for(rp: RunPoint, overrides: dict) -> dict:
         xcd_swizzle=tile["xcd_swizzle2"],
         stage2_lds_load_bytes=tile["stage2_lds_load_bytes"],
         stage2_a_prefetch_schedule=tile["stage2_a_prefetch_schedule"],
+        stage2_a_prefetch_scope=tile["stage2_a_prefetch_scope"],
     )
     if not (r1.legal and r2.legal):
         raise ValueError(f"illegal candidate tiles for {rp.model}/{rp.dtype}: s1={r1.reason} s2={r2.reason}")
@@ -822,6 +828,8 @@ def _flydsl_cmd(rp: RunPoint, gpu_id: str, tile: dict) -> List[str]:
         str(tile.get("stage2_lds_load_bytes", 16)),
         "--stage2_a_prefetch_schedule",
         str(tile.get("stage2_a_prefetch_schedule", "baseline")),
+        "--stage2_a_prefetch_scope",
+        str(tile.get("stage2_a_prefetch_scope", "front")),
         "--skip_ref",
         "true",
         "--compare_aiter_ck",
@@ -991,6 +999,7 @@ def run_point(
         xcd_swizzle2=tile.get("xcd_swizzle2", 0),
         stage2_lds_load_bytes=tile.get("stage2_lds_load_bytes", 16),
         stage2_a_prefetch_schedule=tile.get("stage2_a_prefetch_schedule", "baseline"),
+        stage2_a_prefetch_scope=tile.get("stage2_a_prefetch_scope", "front"),
         flydsl_command=flydsl_command_str,
         strict_error=strict_error,
         error_category=error_category,
@@ -1049,6 +1058,7 @@ _DEFAULT_LAUNCH = {
     "xcd_swizzle2": 0,
     "stage2_lds_load_bytes": 16,
     "stage2_a_prefetch_schedule": "baseline",
+    "stage2_a_prefetch_scope": "front",
 }
 
 
@@ -1120,6 +1130,12 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         default=None,
         help="candidate stage2_a_prefetch_schedule override ('baseline' or 'early')",
     )
+    ap.add_argument(
+        "--stage2-a-prefetch-scope",
+        type=str,
+        default=None,
+        help="candidate stage2_a_prefetch_scope override ('front' or 'all_m')",
+    )
     args = ap.parse_args(argv)
 
     if args.mode == "list":
@@ -1158,6 +1174,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
         "xcd_swizzle2": args.xcd_swizzle2,
         "stage2_lds_load_bytes": args.stage2_lds_load_bytes,
         "stage2_a_prefetch_schedule": args.stage2_a_prefetch_schedule,
+        "stage2_a_prefetch_scope": args.stage2_a_prefetch_scope,
     }
 
     if args.mode == "candidate":
@@ -1211,6 +1228,7 @@ def _main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover - CLI/li
                                 "xcd_swizzle2",
                                 "stage2_lds_load_bytes",
                                 "stage2_a_prefetch_schedule",
+                                "stage2_a_prefetch_scope",
                             )
                         },
                         "reason": "no parseable kernel-path stage times emitted: the subprocess returned "

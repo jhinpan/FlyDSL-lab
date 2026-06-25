@@ -2047,6 +2047,35 @@ def test_stage2_a_prefetch_schedule_threading():
     assert "stage2_a_prefetch_schedule" in harness.CSV_COLUMNS and d["stage2_a_prefetch_schedule"] == "early"
 
 
+def test_stage2_a_prefetch_scope_threading():
+    rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
+    import pytest as _pytest
+
+    assert harness.default_tile_for(rp)["stage2_a_prefetch_scope"] == "front"
+    assert harness.candidate_tile_for(rp, {"stage2_a_prefetch_scope": "all_m"})["stage2_a_prefetch_scope"] == "all_m"
+    with _pytest.raises(ValueError, match="stage2_a_prefetch_scope_invalid"):
+        harness.candidate_tile_for(rp, {"stage2_a_prefetch_scope": "bogus"})
+    tile = harness.candidate_tile_for(rp, {"stage2_a_prefetch_scope": "all_m"})
+    cmd = harness._flydsl_cmd(rp, "0", tile)
+    assert "--stage2_a_prefetch_scope" in cmd and cmd[cmd.index("--stage2_a_prefetch_scope") + 1] == "all_m"
+    prov = harness.Provenance(gpu_id="0", gpu_model="MI350X", branch="b", commit="c")
+    row = harness.PointRow(
+        provenance=prov,
+        command="x",
+        model="deepseek_v3",
+        model_dim=7168,
+        inter_dim=256,
+        experts=257,
+        topk=9,
+        dtype="a4w4",
+        act="silu",
+        token=32,
+        stage2_a_prefetch_scope="all_m",
+    )
+    d = row.to_csv_dict()
+    assert "stage2_a_prefetch_scope" in harness.CSV_COLUMNS and d["stage2_a_prefetch_scope"] == "all_m"
+
+
 def test_flydsl_cmd_emits_launch_knob_flags():
     rp = harness.RunPoint("deepseek_v3", 7168, 256, 257, 9, "silu", "a4w4", 32)
     tile = harness.candidate_tile_for(rp, {"persist_m2": 8, "xcd_swizzle2": 2})

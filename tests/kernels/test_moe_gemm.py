@@ -946,6 +946,7 @@ def run_moe_stage2(
     xcd_swizzle: int = 0,
     stage2_lds_load_bytes: int = 16,
     stage2_a_prefetch_schedule: str = "baseline",
+    stage2_a_prefetch_scope: str = "front",
 ):
     """MoE stage2 (gemm2): out2[t] = sum_{slot} ( out1[t,slot] @ W2[expert]^T ) with optional routed weight."""
 
@@ -1339,6 +1340,7 @@ def run_moe_stage2(
             xcd_swizzle=xcd_swizzle,
             stage2_lds_load_bytes=stage2_lds_load_bytes,
             stage2_a_prefetch_schedule=stage2_a_prefetch_schedule,
+            stage2_a_prefetch_scope=stage2_a_prefetch_scope,
         )
         bias_dummy = torch.empty((0,), device=device, dtype=torch.float32)
 
@@ -1839,6 +1841,7 @@ def test_moe_gemm_2stage(
     xcd_swizzle2: int = 0,
     stage2_lds_load_bytes: int = 16,
     stage2_a_prefetch_schedule: str = "baseline",
+    stage2_a_prefetch_scope: str = "front",
 ):
     """Single 2-stage test: gemm1 -> quantize -> gemm2, with routing built once.
 
@@ -2007,6 +2010,7 @@ def test_moe_gemm_2stage(
         xcd_swizzle=xcd_swizzle2,
         stage2_lds_load_bytes=stage2_lds_load_bytes,
         stage2_a_prefetch_schedule=stage2_a_prefetch_schedule,
+        stage2_a_prefetch_scope=stage2_a_prefetch_scope,
     )
 
 
@@ -2545,6 +2549,12 @@ if __name__ == "__main__":
         default="baseline",
         help="Stage2 A-prefetch in-loop schedule hint: 'baseline' or 'early' (bias DS reads ahead of MFMA).",
     )
+    parser.add_argument(
+        "--stage2_a_prefetch_scope",
+        type=str,
+        default="front",
+        help="Stage2 A-prefetch data-hoist scope: 'front' (mi_idx==0 only) or 'all_m' (all packed-M A LDS reads).",
+    )
 
     # Sorting / comparison knobs
     parser.add_argument(
@@ -2679,6 +2689,7 @@ if __name__ == "__main__":
             xcd_swizzle2=int(args.xcd_swizzle2),
             stage2_lds_load_bytes=int(args.stage2_lds_load_bytes),
             stage2_a_prefetch_schedule=str(args.stage2_a_prefetch_schedule),
+            stage2_a_prefetch_scope=str(args.stage2_a_prefetch_scope),
         )
 
     # Run 2-stage (gemm1 -> quantize -> gemm2) aiter-style test/benchmark.
