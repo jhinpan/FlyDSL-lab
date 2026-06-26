@@ -15,19 +15,38 @@ t=32: 1.03e-05  True
 Threshold is sharp: **t<=4 fail, t>=8 pass.** The nan is DETERMINISTIC (3x identical
 at t1). Kimi a4w4 shows the same t1/2/4 pattern.
 
-## Where the nan is
-Instrumenting `test_fmoe`'s comparison, BOTH tensors are non-finite at t1:
+## Where the failure is — COMPLETE IN-PATH FINITENESS TRACE (loop3 R7, AUTHORITATIVE)
+Earlier rounds gave an inconsistent picture (one note said both out2_ref and out2_ck
+were non-finite). That is SUPERSEDED by a complete, in-path, machine-readable trace
+through the ACTUAL aiter `test_moe_2stage.py` strict path (env-gated
+`AITER_FMOE_TRACE_FINITE=1`; tensors host-cloned without mid-stream device syncs —
+those syncs themselves fault the fp4 path; finiteness computed once at the end).
+Raw output: `dsv3_t1_finite_trace.txt` (DS V3 t1 a4w4, seed 0, --no-aot).
+
 ```
-out2_ref = tensor([-inf, nan, nan, ...])   # torch reference
-out2_ck  = tensor([ inf, nan, nan, ...])   # the kernel (CK path at tiny M)
+tensor            finite   absmax
+input             True     4.219
+score             True     2.625
+topk_weights      True     0.170
+topk_ids          True     237
+a1_qt   (fp4)     True     254      (uint8 storage view; packed bytes finite)
+a1_scale (e8m0)   True     1.0
+out1_ref          True     45056
+a2_qt   (fp4)     True     249
+a2_scale (e8m0)   True     8192
+out2_ref          True     96768    <-- the torch STAGE2 REFERENCE is FINITE
+out2_ck                    -> run aborts in fused_moe (CK kernel): AssertionError
 ```
-So it is NOT only the torch reference overflowing — the **kernel output itself is
-inf/nan at M=1-4**. The reference already computes in fp32 (`ctype=fp32` in
-torch_moe_stage1/2), so fp32-accumulation is already in place and is not the fix;
-t>=8 uses the same fp32 path and is finite. This is a tiny-M STRUCTURAL edge case
-(routing/sorting produces near-empty expert blocks at M=1-4; the fp4 1x32 block
-quant + e8m0 scale path then yields inf for the degenerate blocks), not a simple
-accumulation-precision bug.
+
+AUTHORITATIVE CONCLUSION: the ENTIRE torch reference path — including `out2_ref`
+(absmax 96768, finite) — is finite. The FIRST and ONLY failure is `out2_ck`, the
+aiter **CK stage2 kernel** output: the `fused_moe` call raises before producing a
+finite `out2_ck`. So the tiny-M (M<=4) failure is conclusively in the aiter CK
+stage2 fp4 kernel, NOT the torch reference, NOT the fp4 quant of the inputs (a1/a2
+quant + scales all finite), and NOT FlyDSL. The reference already computes in fp32
+(`ctype=fp32` in torch_moe_stage1/2) and is finite at t1; fp32 accumulation is not
+the issue. (The earlier "both non-finite / structural reference overflow" wording
+was wrong and is retracted.)
 
 ## Why this is not the persist_m=1 optimization
 - The failing rows are DS V3 / Kimi tiny tokens, which dispatch a **CK** stage2
@@ -60,7 +79,12 @@ that stronger claim was retracted. The decisive evidence is the ROOT-CAUSE TRACE
 below (the nan is in the aiter CK stage2 kernel output, not the data/reference),
 which is what makes this conclusively an aiter-kernel issue regardless of seed.
 
-## ROOT-CAUSE TRACE (loop3 R6, per R5-review request): the nan is in the aiter CK stage2 KERNEL, not the reference
+## ROOT-CAUSE TRACE (loop3 R6 — early hand-path; SUPERSEDED by the R7 in-path trace above)
+NOTE: this R6 trace used a hand-reconstructed path that stopped at out1_ref (absmax
+varies with the path/inputs vs the R7 in-path numbers; both are finite). The
+AUTHORITATIVE evidence is the R7 COMPLETE IN-PATH TRACE above (which also covers
+a2_qt/a2_scale/out2_ref). Kept for history; conclusions agree (reference finite,
+CK kernel fails).
 Step-by-step finiteness trace of the DS V3 t1 a4w4 strict path (seed 0, GPU0):
 ```
 input (bf16 randn)          finite=True  absmax=4.219
