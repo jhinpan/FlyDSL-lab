@@ -15,7 +15,7 @@ t=32: 1.03e-05  True
 Threshold is sharp: **t<=4 fail, t>=8 pass.** The nan is DETERMINISTIC (3x identical
 at t1). Kimi a4w4 shows the same t1/2/4 pattern.
 
-## Where the failure is — COMPLETE IN-PATH FINITENESS TRACE (loop3 R7, AUTHORITATIVE)
+## Where the failure is — COMPLETE IN-PATH FINITENESS TRACE (loop3 R8, AUTHORITATIVE)
 Earlier rounds gave an inconsistent picture (one note said both out2_ref and out2_ck
 were non-finite). That is SUPERSEDED by a complete, in-path, machine-readable trace
 through the ACTUAL aiter `test_moe_2stage.py` strict path (env-gated
@@ -35,18 +35,26 @@ out1_ref          True     45056
 a2_qt   (fp4)     True     249
 a2_scale (e8m0)   True     8192
 out2_ref          True     96768    <-- the torch STAGE2 REFERENCE is FINITE
-out2_ck                    -> run aborts in fused_moe (CK kernel): AssertionError
+out2_ck           FALSE    nan=6681 inf=487 absmax=3.4028e38  <-- CK KERNEL output
+calc_diff.num/den/sim FALSE  nan (downstream of out2_ck)
+logits_diff       NaN      -> correctness_pass=False, reference_invalid
 ```
+(R8 update: complete --iters 2 trace; the R7 "stops at out2_ref / --iters 1
+AssertionError = CK abort" version is superseded. With --iters 2 the run COMPLETES
+and the CK kernel returns a NON-FINITE out2_ck — it does not raise. The earlier
+empty AssertionError was aiter's timing-helper `assert num_iters>1`, a confound.)
 
 AUTHORITATIVE CONCLUSION: the ENTIRE torch reference path — including `out2_ref`
 (absmax 96768, finite) — is finite. The FIRST and ONLY failure is `out2_ck`, the
-aiter **CK stage2 kernel** output: the `fused_moe` call raises before producing a
-finite `out2_ck`. So the tiny-M (M<=4) failure is conclusively in the aiter CK
-stage2 fp4 kernel, NOT the torch reference, NOT the fp4 quant of the inputs (a1/a2
-quant + scales all finite), and NOT FlyDSL. The reference already computes in fp32
+aiter **CK stage2 kernel** output (out2_ck: 6681 nan + 487 inf, absmax 3.40e38 =
+fp32 max). calc_diff/logits are nan only DOWNSTREAM of out2_ck. So the tiny-M
+(M<=4) failure is conclusively in the aiter CK stage2 fp4 kernel, NOT the torch
+reference, NOT the fp4 quant of the inputs (a1/a2 quant + scales all finite), and
+NOT FlyDSL (DS V3 t1 dispatches a CK stage2 kernel; the persist_m=1 change is a
+FlyDSL GPT-OSS-large kernel). The reference computes in fp32
 (`ctype=fp32` in torch_moe_stage1/2) and is finite at t1; fp32 accumulation is not
-the issue. (The earlier "both non-finite / structural reference overflow" wording
-was wrong and is retracted.)
+the issue. (The earlier "both non-finite" and "fused_moe raises/AssertionError"
+wordings are retracted; the CK kernel RETURNS a non-finite out2_ck under --iters 2.)
 
 ## Why this is not the persist_m=1 optimization
 - The failing rows are DS V3 / Kimi tiny tokens, which dispatch a **CK** stage2
@@ -58,9 +66,11 @@ was wrong and is retracted.)
   the locked baseline is itself stale/non-reproducible at these rows.
 
 ## Fix attempts and outcome
-1. Seeding the RNG: probed multiple seeds; the tiny-M path remained non-finite and
-   even triggered a GPU HSA_STATUS_ERROR_EXCEPTION on the fp4 quant probe — not a
-   reliable fix and risks masking a real kernel edge case.
+1. Seeding the RNG: probed multiple seeds; the tiny-M path stayed non-finite for
+   every tested seed (DS V3 t1). (A separate manual mid-stream-sync probe once
+   triggered a GPU HSA exception — that was an artifact of forcing per-op device
+   syncs, NOT the normal path; the clean --iters 2 in-path trace above completes
+   and shows the CK kernel RETURNS a non-finite out2_ck without raising.) Not a fix.
 2. fp32 reference accumulation: already present (ctype=fp32); t>=8 confirms it is
    sufficient where the structure is non-degenerate, so it does not address t<=4.
 3. A pure reference clamp/finite-guard would make logits finite ONLY by altering

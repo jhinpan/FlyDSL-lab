@@ -1,3 +1,4 @@
+# command: AITER_FMOE_TRACE_FINITE=1 HIP_VISIBLE_DEVICES=0 FLYDSL_RUNTIME_CACHE_DIR=/tmp/loop3_committed_cache python3 scripts/aiter_strict_point.py --model-dim 7168 --inter-dim 256 -e 257 -k 9 -t 1 --aq fp4 --wq fp4 --act silu --gate separated --warmup 2 --iters 2 --no-aot --seed 0 --aiter-repo /sgl-workspace/aiter
 [aiter] import [module_aiter_core] under /sgl-workspace/aiter/aiter/jit/module_aiter_core.so
 [aiter] moe_2stage: scanned 0 cases, recorded 0 results (skipped 0)
 [aiter] moe_2stage summary (markdown):
@@ -23,6 +24,14 @@ calling test_fmoe(dtype                        = torch.bfloat16,
                   preshuffle                   = True,
                   swiglu_limit                 = 0.0)
 [aiter] import [module_moe_asm] under /sgl-workspace/aiter/aiter/jit/module_moe_asm.so
+[aiter] merge tuned file under model_configs/ and configs/ /sgl-workspace/aiter/aiter/configs/tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_ds_v3.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_glm5.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_minimax-m2_5.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_qwen3_235b.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_qwen3_5_397b.csv:/sgl-workspace/aiter/aiter/configs/model_configs/dsv3_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/dsv4_fp8fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/glm47_fp8_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/gptoss_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/gptoss_fp8fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/kimik2_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/kimik2_fp8fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/kimik2_i4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/minimax_m25_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/qwen3_5_397b_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/qwen3next_80b_fp8_tuned_fmoe.csv
+[aiter] [fused_moe] duplicate tuned rows after disabling act_type in /tmp/aiter_configs/tuned_fmoe.csv; keeping first match for 431 rows
+[aiter] [fused_moe] using 2stage (kernelName1='flydsl_moe1_afp4_wfp4_bf16_t32x128x256_w3_kb14_fp4', kernelName2='moe_ck2stages_gemm2_64x32x32x128_1x1_MulABScaleExpertWeightShuffled_v1_Nswizzle0_Quant3_MulRoutedWeight1_FP4X2_FP4X2_B16') for (256, 1, 7168, 256, 257, 9, <ActivationType.Silu: 0>, 'torch.bfloat16', 'torch.float4_e2m1fn_x2', 'torch.float4_e2m1fn_x2', 'QuantType.per_1x32', True, False) 
+[aiter] import [module_moe_sorting_opus] under /sgl-workspace/aiter/aiter/jit/module_moe_sorting_opus.so
+[aiter] import [module_quant] under /sgl-workspace/aiter/aiter/jit/module_quant.so
+[aiter] import [module_moe_ck2stages_fp4x2_fp4x2_preshuffle_on_b16_silu_per_1x32_mulWeightStage2] under /sgl-workspace/aiter/aiter/jit/module_moe_ck2stages_fp4x2_fp4x2_preshuffle_on_b16_silu_per_1x32_mulWeightStage2.so
+[aiter] type hints mismatch, override to --> ck_moe_stage2(inter_states: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor, sorted_token_ids: torch.Tensor, sorted_expert_ids: torch.Tensor, num_valid_ids: torch.Tensor, out: torch.Tensor, topk: int, kernelName: str = None, w2_scale: Optional[torch.Tensor] = None, a2_scale: Optional[torch.Tensor] = None, block_m: Optional[int] = 32, sorted_weights: Optional[torch.Tensor] = None, quant_type: int = 0, activation: int = 0, splitk: Optional[int] = 1, non_temporal_load: bool = False, dst_type: Optional[str] = None, is_shuffled: bool = True) -> None
+[W626 01:06:02.568275649 collection.cpp:1133] Warning: ROCTracer produced duplicate flow start: 3 (function operator())
 FMOE_TRACE {"tensor": "input", "shape": [1, 7168], "dtype": "torch.bfloat16", "finite": true, "nan": 0, "inf": 0, "absmax": 4.21875}
 FMOE_TRACE {"tensor": "score", "shape": [1, 257], "dtype": "torch.bfloat16", "finite": true, "nan": 0, "inf": 0, "absmax": 2.625}
 FMOE_TRACE {"tensor": "topk_weights", "shape": [1, 9], "dtype": "torch.float32", "finite": true, "nan": 0, "inf": 0, "absmax": 0.16974425315856934}
@@ -33,12 +42,21 @@ FMOE_TRACE {"tensor": "out1_ref", "shape": [1, 9, 256], "dtype": "torch.bfloat16
 FMOE_TRACE {"tensor": "a2_qt", "shape": [1, 9, 128], "dtype": "torch.float4_e2m1fn_x2", "finite": true, "nan": 0, "inf": 0, "absmax": 249.0}
 FMOE_TRACE {"tensor": "a2_scale", "shape": [9, 8], "dtype": "torch.float8_e8m0fnu", "finite": true, "nan": 0, "inf": 0, "absmax": 8192.0}
 FMOE_TRACE {"tensor": "out2_ref", "shape": [1, 7168], "dtype": "torch.bfloat16", "finite": true, "nan": 0, "inf": 0, "absmax": 96768.0}
-[aiter] merge tuned file under model_configs/ and configs/ /sgl-workspace/aiter/aiter/configs/tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_ds_v3.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_glm5.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_minimax-m2_5.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_qwen3_235b.csv:/sgl-workspace/aiter/aiter/configs/model_configs/a8w8_blockscale_tuned_fmoe_qwen3_5_397b.csv:/sgl-workspace/aiter/aiter/configs/model_configs/dsv3_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/dsv4_fp8fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/glm47_fp8_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/gptoss_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/gptoss_fp8fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/kimik2_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/kimik2_fp8fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/kimik2_i4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/minimax_m25_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/qwen3_5_397b_fp4_tuned_fmoe.csv:/sgl-workspace/aiter/aiter/configs/model_configs/qwen3next_80b_fp8_tuned_fmoe.csv
-[aiter] [fused_moe] duplicate tuned rows after disabling act_type in /tmp/aiter_configs/tuned_fmoe.csv; keeping first match for 431 rows
-[aiter] [fused_moe] using 2stage (kernelName1='flydsl_moe1_afp4_wfp4_bf16_t32x128x256_w3_kb14_fp4', kernelName2='moe_ck2stages_gemm2_64x32x32x128_1x1_MulABScaleExpertWeightShuffled_v1_Nswizzle0_Quant3_MulRoutedWeight1_FP4X2_FP4X2_B16') for (256, 1, 7168, 256, 257, 9, <ActivationType.Silu: 0>, 'torch.bfloat16', 'torch.float4_e2m1fn_x2', 'torch.float4_e2m1fn_x2', 'QuantType.per_1x32', True, False) 
-[aiter] import [module_moe_sorting_opus] under /sgl-workspace/aiter/aiter/jit/module_moe_sorting_opus.so
-[aiter] import [module_quant] under /sgl-workspace/aiter/aiter/jit/module_quant.so
-[aiter] import [module_moe_ck2stages_fp4x2_fp4x2_preshuffle_on_b16_silu_per_1x32_mulWeightStage2] under /sgl-workspace/aiter/aiter/jit/module_moe_ck2stages_fp4x2_fp4x2_preshuffle_on_b16_silu_per_1x32_mulWeightStage2.so
-[aiter] type hints mismatch, override to --> ck_moe_stage2(inter_states: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor, sorted_token_ids: torch.Tensor, sorted_expert_ids: torch.Tensor, num_valid_ids: torch.Tensor, out: torch.Tensor, topk: int, kernelName: str = None, w2_scale: Optional[torch.Tensor] = None, a2_scale: Optional[torch.Tensor] = None, block_m: Optional[int] = 32, sorted_weights: Optional[torch.Tensor] = None, quant_type: int = 0, activation: int = 0, splitk: Optional[int] = 1, non_temporal_load: bool = False, dst_type: Optional[str] = None, is_shuffled: bool = True) -> None
-[W626 00:50:12.771189676 collection.cpp:1133] Warning: ROCTracer produced duplicate flow start: 3 (function operator())
-STRICT_RESULT {"strict_accuracy": true, "check_aot_cache": false, "warmup": 1, "iters": 1, "act": "silu", "gate": "separated", "aq": "fp4", "wq": "fp4", "require_tuned_fmoe": false, "expected_kernel_name2": "", "seed": 0, "error": "AssertionError: ", "error_category": "correctness", "correctness_pass": false}
+FMOE_TRACE {"tensor": "out2_ck", "shape": [1, 7168], "dtype": "torch.bfloat16", "finite": false, "nan": 6681, "inf": 487, "absmax": 3.4028234663852886e+38}
+FMOE_TRACE {"tensor": "calc_diff.numerator", "shape": [], "dtype": "torch.float64", "finite": false, "nan": 1, "inf": 0, "absmax": 0.0}
+FMOE_TRACE {"tensor": "calc_diff.denominator", "shape": [], "dtype": "torch.float64", "finite": false, "nan": 1, "inf": 0, "absmax": 0.0}
+FMOE_TRACE {"tensor": "calc_diff.sim", "shape": [], "dtype": "torch.float64", "finite": false, "nan": 1, "inf": 0, "absmax": 0.0}
+FMOE_TRACE {"tensor": "logits_diff", "scalar": NaN, "finite": false}
+[aiter] ck_moe_2stages:   37.16 us,     2.67 tflops......(quant:torch.float4_e2m1fn_x2)[checkAllclose atol=0.01 rtol=0.01 [31mfailed![0m]
+    a    : torch.Size([1, 7168])
+           tensor([-1.0391e-35, -1.9712e+04,  8.3561e+28,  8.3840e+03,  6.3000e+01,
+        -2.9120e+03, -7.2155e+11, -2.4448e+04], device='cuda:0',
+       dtype=torch.bfloat16)
+    b    : torch.Size([1, 7168])
+           tensor([nan, nan, nan, nan, nan, nan, nan, nan], device='cuda:0',
+       dtype=torch.bfloat16)
+    delta:
+           tensor([nan, nan, nan, nan, nan, nan, nan, nan], device='cuda:0',
+       dtype=torch.bfloat16)
+[aiter] -->max abs delta:nan, delta details: 100.0% (7168 of 7168) elements
+STRICT_RESULT {"strict_accuracy": true, "check_aot_cache": false, "warmup": 2, "iters": 2, "act": "silu", "gate": "separated", "aq": "fp4", "wq": "fp4", "require_tuned_fmoe": false, "expected_kernel_name2": "", "seed": 0, "e2e_us": 37.155000000000086, "e2e_us_p95": 660.3659987449646, "logits_diff": NaN, "correctness_pass": false, "error_category": "reference_invalid"}
