@@ -1021,12 +1021,46 @@ def scan_win_label_backed_by_claimable(
             if not os.path.exists(cand_abs):
                 offenders.append((ts, model, f"config.claimable=True but candidate csv_path does not exist: {cand}"))
                 continue
-            # An active result:"win" is ALWAYS validated against the locked-baseline
-            # comparator (the immutable win definition).  There is NO dispatch_change
-            # bypass: compare_csvs_dispatch_change is diagnostic-only and must never
-            # back a result:"win" row (R1 review: redefining the win in mutable text
-            # is an integrity violation).  A dispatch-only result must be recorded as
-            # result:"neutral" dispatch-evidence, not "win".
+            cfg = rec.get("config") or {}
+            # DEC-2b (user-authorized scope amendment): a dispatch-only win may be
+            # validated by compare_csvs_dispatch_change against the recorded fresh
+            # paired baseline INSTEAD of the locked comparator -- but ONLY when the
+            # row explicitly carries config.verdict=="dispatch_change" AND
+            # config.dec2b_authorized is True (the user's recorded authorization).
+            # This is NOT the R1 silent bypass: it requires an explicit, recorded
+            # human decision, the dispatch-change verdict still enforces unchanged-row
+            # config-identity + changed-row timing-clean + the strict gate, and
+            # without the authorization flag the locked comparator below still rules.
+            if cfg.get("verdict") == "dispatch_change" and cfg.get("dec2b_authorized") is True:
+                ev = rec.get("evidence") or {}
+                base_rel = ev.get("baseline_csv") or ""
+                base_abs = base_rel if os.path.isabs(base_rel) else os.path.join(repo_root, base_rel)
+                changed = {tuple(k) for k in ev.get("changed_keys") or []}
+                quar = {tuple(k) for k in ev.get("quarantine_keys") or []}
+                if not base_rel or not os.path.exists(base_abs):
+                    offenders.append(
+                        (ts, model, f"dec2b dispatch_change win but fresh paired baseline missing: {base_rel}")
+                    )
+                    continue
+                if not changed:
+                    offenders.append((ts, model, "dec2b dispatch_change win but evidence.changed_keys missing"))
+                    continue
+                try:
+                    ok = compare_csvs_dispatch_change(
+                        base_abs, cand_abs, changed_keys=changed, quarantine_keys=quar
+                    ).claimable_dispatch_win
+                except Exception as e:
+                    offenders.append((ts, model, f"dec2b dispatch_change recompute raised: {e!r}"))
+                    continue
+                if not ok:
+                    offenders.append(
+                        (ts, model, "dec2b dispatch_change win but claimable_dispatch_win recomputes False")
+                    )
+                continue
+            # Otherwise an active result:"win" is validated against the locked-baseline
+            # comparator (the immutable win definition).  A dispatch-only result that
+            # is NOT explicitly DEC-2b-authorized must be recorded as result:"neutral"
+            # dispatch-evidence, not "win" (R1 integrity rule).
             if not os.path.exists(baseline_csv):
                 offenders.append((ts, model, f"config.claimable=True but baseline CSV does not exist: {baseline_csv}"))
                 continue

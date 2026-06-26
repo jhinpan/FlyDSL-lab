@@ -15,6 +15,7 @@ from scripts.moe_tuning_ledger import (  # noqa: E402
     compare_csvs_dispatch_change,
     scan_candidate_csv_freshness,
     scan_changed_rows_fail_closed,
+    scan_win_label_backed_by_claimable,
     selected_candidate_gate,
 )
 
@@ -383,6 +384,45 @@ def test_changed_rows_fail_closed_requires_expected_kernel(tmp_path):
     )
     p2 = _write(tmp_path / "enf.csv", [enf])
     assert scan_changed_rows_fail_closed(p2, changed) == []
+
+
+def test_dec2b_unauthorized_dispatch_change_win_is_flagged(tmp_path):
+    # A result:win with verdict=dispatch_change but WITHOUT dec2b_authorized must
+    # still be validated against the locked comparator (and flagged if it can't be
+    # recomputed True). The integrity guard must not be bypassable without the
+    # explicit user authorization flag.
+    import json
+
+    rec = {
+        "result": "win",
+        "model": "gpt_oss",
+        "timestamp": "t",
+        "config": {"claimable": True, "verdict": "dispatch_change"},  # no dec2b_authorized
+        "csv_path": "docs/loop3_models/candidate_fresh40.csv",
+    }
+    p = tmp_path / "a.jsonl"
+    p.write_text(json.dumps(rec) + "\n")
+    off = scan_win_label_backed_by_claimable(str(p))
+    assert off, "unauthorized dispatch_change win must be flagged (no silent bypass)"
+
+
+def test_dec2b_requires_baseline_and_changed_keys(tmp_path):
+    # An authorized dispatch_change win missing the fresh paired baseline / changed
+    # keys evidence is flagged (cannot recompute).
+    import json
+
+    rec = {
+        "result": "win",
+        "model": "gpt_oss",
+        "timestamp": "t",
+        "config": {"claimable": True, "verdict": "dispatch_change", "dec2b_authorized": True},
+        "csv_path": "docs/loop3_models/candidate_fresh40.csv",
+        "evidence": {},  # no baseline_csv / changed_keys
+    }
+    p = tmp_path / "b.jsonl"
+    p.write_text(json.dumps(rec) + "\n")
+    off = scan_win_label_backed_by_claimable(str(p))
+    assert off, "dec2b win without baseline/changed_keys evidence must be flagged"
 
 
 if __name__ == "__main__":
