@@ -89,10 +89,10 @@ that stronger claim was retracted. The decisive evidence is the ROOT-CAUSE TRACE
 below (the nan is in the aiter CK stage2 kernel output, not the data/reference),
 which is what makes this conclusively an aiter-kernel issue regardless of seed.
 
-## ROOT-CAUSE TRACE (loop3 R6 — early hand-path; SUPERSEDED by the R7 in-path trace above)
+## ROOT-CAUSE TRACE (loop3 R6 — early hand-path; SUPERSEDED by the R8 in-path trace above)
 NOTE: this R6 trace used a hand-reconstructed path that stopped at out1_ref (absmax
-varies with the path/inputs vs the R7 in-path numbers; both are finite). The
-AUTHORITATIVE evidence is the R7 COMPLETE IN-PATH TRACE above (which also covers
+varies with the path/inputs vs the R8 in-path numbers; both are finite). The
+AUTHORITATIVE evidence is the R8 COMPLETE IN-PATH TRACE above (which also covers
 a2_qt/a2_scale/out2_ref). Kept for history; conclusions agree (reference finite,
 CK kernel fails).
 Step-by-step finiteness trace of the DS V3 t1 a4w4 strict path (seed 0, GPU0):
