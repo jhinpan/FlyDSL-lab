@@ -49,15 +49,46 @@ accumulation-precision bug.
    would be hiding a real tiny-M kernel question, not a correctness fix. Rejected
    as semantics-violating (the plan forbids weakening correctness).
 
-## Seed sweep (loop3 R5): deterministic seeding does NOT help
+## Seed sweep (loop3 R5; wording bounded loop3 R6 per R5-review)
 Added `--seed` to aiter_strict_point.py (input determinism only; does not alter
-kernel/reference numerics or thresholds). DS V3 t1 with seeds {0,1,7,42,123,2024}:
-ALL produce `logits_diff=nan`, `correctness_pass=False`, `reference_invalid`. So
-the overflow is NOT a data-dependent edge case a fixed seed avoids -- it is
-INHERENT to the fp4 tiny-M (M<=4) shape on the current aiter stack (every random
-input overflows). This rules out the last in-scope fix (determinism); the
-remaining options are an aiter-kernel/quant change (out of scope for a FlyDSL MoE
-dispatch optimization) or a user DEC-2 decision.
+kernel/reference numerics or thresholds). BOUNDED measured evidence: DS V3 t1 a4w4
+with seeds {0,1,7,42,123,2024} ALL produced `logits_diff=nan`,
+`correctness_pass=False`, `reference_invalid`. This shows the tested common global
+seeds did NOT find a usable deterministic input that unblocks the gate at DS V3 t1.
+It does NOT prove every possible random input or all six rows are non-finite --
+that stronger claim was retracted. The decisive evidence is the ROOT-CAUSE TRACE
+below (the nan is in the aiter CK stage2 kernel output, not the data/reference),
+which is what makes this conclusively an aiter-kernel issue regardless of seed.
+
+## ROOT-CAUSE TRACE (loop3 R6, per R5-review request): the nan is in the aiter CK stage2 KERNEL, not the reference
+Step-by-step finiteness trace of the DS V3 t1 a4w4 strict path (seed 0, GPU0):
+```
+input (bf16 randn)          finite=True  absmax=4.219
+a1 fp4 quant a1_scale(e8m0) finite=True  absmax=1
+mxfp4_to_f32(a1_qt)         finite=True  absmax=6
+e8m0_to_f32(a1_scale)       finite=True  absmax=1
+topk_weights                finite=True
+out1_ref (stage1 torch ref) finite=True  absmax=380.5
+```
+The ENTIRE torch reference path is finite. The non-finite values appear only in
+`out2_ck` (the stage2 KERNEL output), as seen in the full test_fmoe trace
+(out2_ck = [inf, nan, ...]).
+
+DS V3 t1 stage2 dispatches `kernelName2 =
+moe_ck2stages_gemm2_64x32x32x128_..._FP4X2_FP4X2_B16` -- a **CK** (Composable
+Kernel) stage2 kernel, NOT a FlyDSL kernel and NOT the `_pm1` FlyDSL path. So the
+tiny-M (M<=4) overflow is conclusively an **aiter CK stage2 fp4 kernel** defect at
+very small M, independent of:
+- the torch reference (finite at every step above),
+- the FlyDSL kernels (the persist_m=1 change is a FlyDSL GPT-OSS-large stage2
+  kernel; DS V3/Kimi tiny tokens never touch it),
+- input data (the activation fp4 quant/dequant is finite).
+
+This is the precise first-non-finite-tensor finding the R5 review asked for: the
+first non-finite tensor is the CK stage2 kernel output `out2_ck`, produced by
+aiter's CK fp4 stage2 kernel. A correct fix is therefore an aiter CK-kernel change
+at tiny M -- entirely outside a FlyDSL MoE dispatch optimization's scope, and not
+fixable by any reference/seed/accumulation change on the FlyDSL side.
 
 ## Conclusion (evidence for the DEC-2 escalation, per R2-review gate)
 The six tiny-token rows fail the strict gate due to a tiny-M (M=1-4) structural
