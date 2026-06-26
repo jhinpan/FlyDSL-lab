@@ -49,6 +49,16 @@ accumulation-precision bug.
    would be hiding a real tiny-M kernel question, not a correctness fix. Rejected
    as semantics-violating (the plan forbids weakening correctness).
 
+## Seed sweep (loop3 R5): deterministic seeding does NOT help
+Added `--seed` to aiter_strict_point.py (input determinism only; does not alter
+kernel/reference numerics or thresholds). DS V3 t1 with seeds {0,1,7,42,123,2024}:
+ALL produce `logits_diff=nan`, `correctness_pass=False`, `reference_invalid`. So
+the overflow is NOT a data-dependent edge case a fixed seed avoids -- it is
+INHERENT to the fp4 tiny-M (M<=4) shape on the current aiter stack (every random
+input overflows). This rules out the last in-scope fix (determinism); the
+remaining options are an aiter-kernel/quant change (out of scope for a FlyDSL MoE
+dispatch optimization) or a user DEC-2 decision.
+
 ## Conclusion (evidence for the DEC-2 escalation, per R2-review gate)
 The six tiny-token rows fail the strict gate due to a tiny-M (M=1-4) structural
 edge case in the aiter CK MoE path + fp4 1x32 quant, reproduced deterministically

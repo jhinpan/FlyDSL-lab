@@ -79,6 +79,14 @@ def main(argv=None) -> int:
     ap.add_argument("--no-aot", action="store_true", help="disable AOT-cache check (records it)")
     ap.add_argument("--aiter-repo", default="/sgl-workspace/aiter")
     ap.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="torch.manual_seed for deterministic test inputs (input determinism only; "
+        "does not change kernel/reference numerics). Used to probe the tiny-token fp4 "
+        "reference-overflow edge case.",
+    )
+    ap.add_argument(
         "--require-tuned-fmoe",
         action="store_true",
         help="fail closed (AITER_REQUIRE_TUNED_FMOE=1): raise if no tuned row resolves "
@@ -104,6 +112,16 @@ def main(argv=None) -> int:
 
     mod = _load_aiter_module(args.aiter_repo)
     import aiter
+
+    # Optional deterministic seeding of the test's random inputs.  This is input
+    # DETERMINISM only -- it does NOT alter kernel/reference numerics or thresholds;
+    # the kernel is still compared against the honest torch reference.  Used to test
+    # whether the tiny-token (M<=4) fp4 reference overflow (#643) is a data-dependent
+    # edge case that a fixed seed avoids.
+    if args.seed is not None:
+        import torch as _torch
+
+        _torch.manual_seed(int(args.seed))
 
     dts = _resolve_dtypes()
     aq, wq = dts[args.aq], dts[args.wq]
@@ -166,6 +184,7 @@ def main(argv=None) -> int:
         "wq": args.wq,
         "require_tuned_fmoe": bool(args.require_tuned_fmoe),
         "expected_kernel_name2": args.expect_kernel_name2,
+        "seed": args.seed if args.seed is not None else "",
     }
     try:
         ret = test_fn(

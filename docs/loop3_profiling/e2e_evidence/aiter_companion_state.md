@@ -5,7 +5,9 @@ The strict-e2e measurements in this loop run against the aiter checkout at
 the remaining untracked paths are generated/irrelevant (R3-review item).
 
 ## Committed source state (what the strict path actually uses)
-- aiter HEAD: `d3cf8f89d` (and lineage 51f2969c5 → 43c873d69 → d3cf8f89d).
+- aiter HEAD: `41a8b5c55` (lineage: 51f2969c5 → 43c873d69 → d3cf8f89d → ed22b13dd
+  → 41a8b5c55; ed22b13dd = file-path hermetic no-fallback test, 41a8b5c55 = black
+  format of that test).
 - The dispatch + production config + no-fallback + vendored FlyDSL kernel overlay
   are ALL committed:
   - `aiter/configs/model_configs/gptoss_fp4_tuned_fmoe.csv` (GPT-OSS large `_pm1`).
@@ -31,7 +33,7 @@ Verified none is referenced by the fused-MoE / flydsl moe dispatch path:
 
 ## Replay
 1. From FlyDSL: `bash scripts/sync_aiter_flydsl_kernels.sh /sgl-workspace/aiter`
-   (idempotent; the overlay is already committed at d3cf8f89d).
+   (idempotent; the overlay is already committed at aiter 41a8b5c55).
 2. AOT precompile from the committed merged config into a fresh cache:
    `FLYDSL_RUNTIME_CACHE_DIR=<dir> python3 -m aiter.aot.flydsl.moe --csv <a4w4 rows>`.
 3. Strict run with the same cache + (for changed rows) `--expect-kernel-name2`.
