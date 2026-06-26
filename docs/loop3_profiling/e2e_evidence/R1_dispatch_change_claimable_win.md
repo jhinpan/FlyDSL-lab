@@ -10,7 +10,7 @@ coverage_complete: True
 config_identity_clean: True   (31 unchanged rows config-identical to fresh pm4 baseline)
 timed_clean: True             (changed rows: no kp/e2e regression)
 large_wins: [gpt_oss/a4w4/swiglu/16384, gpt_oss/a4w4/swiglu/32768]
-quarantined: 6                (DS V3 + Kimi t1/2/4 reference_invalid, issue #643)
+quarantined: 6                (DS V3 + Kimi t1/2/4 reference_invalid, issue #3964)
 gate.passed: True             (strict correctness + aot_status=checked on all reference-valid rows)
 >>> claimable_dispatch_win: True
 ```
@@ -36,7 +36,7 @@ strict AOT-checked e2e -12..-16% in gptoss_a4w4_e2e_pm1_vs_baseline.json.)
   CONFIG-IDENTICAL to the baseline (same kernel/params ⇒ same production behavior).
   This avoids attributing irreducible small/mid-token node noise to the change.
 - **Quarantine** (6 tiny rows): DS V3/Kimi t1/2/4 dispatch a CK kernel whose torch
-  reference overflows to nan (#643) — classified error_category=reference_invalid,
+  reference overflows to nan (#3964) — classified error_category=reference_invalid,
   excluded from gate/regression but NEVER able to hide a real mismatch.
 
 ## Measurement-protocol lesson (this round)
