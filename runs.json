@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-07-03T22:17:52Z",
+ "updated": "2026-07-03T22:38:15Z",
  "repo": "jhinpan/FlyDSL-lab",
  "runs": [
   {
@@ -10,38 +10,38 @@
    "branch": "main",
    "event": "push",
    "title": "[pa] Deterministic split-partition reduce for PS decode (#776)",
-   "status": "queued",
-   "conclusion": null,
+   "status": "completed",
+   "conclusion": "cancelled",
    "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28625974154",
    "created_at": "2026-07-02T22:37:12Z",
-   "updated_at": "2026-07-02T22:37:59Z",
+   "updated_at": "2026-07-03T22:38:01Z",
    "actor": "jhinpan",
    "jobs": [
     {
      "runner": "linux-flydsl-mi325-1",
      "arch": "gfx942",
-     "status": "queued",
-     "conclusion": null,
+     "status": "completed",
+     "conclusion": "cancelled",
      "started_at": "2026-07-02T22:37:59Z",
-     "completed_at": null,
+     "completed_at": "2026-07-03T22:38:00Z",
      "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28625974154/job/84892521858"
     },
     {
      "runner": "linux-flydsl-mi355-1",
      "arch": "gfx950",
-     "status": "queued",
-     "conclusion": null,
+     "status": "completed",
+     "conclusion": "cancelled",
      "started_at": "2026-07-02T22:37:59Z",
-     "completed_at": null,
+     "completed_at": "2026-07-03T22:38:00Z",
      "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28625974154/job/84892521870"
     },
     {
      "runner": "linux-flydsl-navi-2",
      "arch": "gfx1201",
-     "status": "queued",
-     "conclusion": null,
+     "status": "completed",
+     "conclusion": "cancelled",
      "started_at": "2026-07-02T22:37:59Z",
-     "completed_at": null,
+     "completed_at": "2026-07-03T22:38:00Z",
      "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28625974154/job/84892521871"
     }
    ]
