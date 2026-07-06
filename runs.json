@@ -1,8 +1,51 @@
 {
  "schema": 1,
- "updated": "2026-07-06T20:16:25Z",
+ "updated": "2026-07-06T22:40:33Z",
  "repo": "jhinpan/FlyDSL-lab",
  "runs": [
+  {
+   "run_id": 28824577383,
+   "pr": null,
+   "commit": "c7022c424dabd9bb6266ef5980b0836e7e9cc872",
+   "branch": "main",
+   "event": "push",
+   "title": "update to 0.2.3 (#804)",
+   "status": "queued",
+   "conclusion": null,
+   "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28824577383",
+   "created_at": "2026-07-06T21:30:05Z",
+   "updated_at": "2026-07-06T21:30:49Z",
+   "actor": "jhinpan",
+   "jobs": [
+    {
+     "runner": "linux-flydsl-mi325-1",
+     "arch": "gfx942",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-06T21:30:49Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28824577383/job/85484556051"
+    },
+    {
+     "runner": "linux-flydsl-navi-2",
+     "arch": "gfx1201",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-06T21:30:49Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28824577383/job/85484556053"
+    },
+    {
+     "runner": "linux-flydsl-mi355-1",
+     "arch": "gfx950",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-06T21:30:49Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/28824577383/job/85484556060"
+    }
+   ]
+  },
   {
    "run_id": 28625974154,
    "pr": null,
