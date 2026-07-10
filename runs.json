@@ -1,8 +1,51 @@
 {
  "schema": 1,
- "updated": "2026-07-09T22:44:46Z",
+ "updated": "2026-07-10T04:18:39Z",
  "repo": "jhinpan/FlyDSL-lab",
  "runs": [
+  {
+   "run_id": 29060059545,
+   "pr": null,
+   "commit": "927959cd98efada6eb6e4f19eb76bfed8a643246",
+   "branch": "main",
+   "event": "push",
+   "title": "[Kernel] Add compile_mxfp6_gemm: MXFP6\u00d7MXFP4 preshuffle GEMM (gfx950)\u2026",
+   "status": "queued",
+   "conclusion": null,
+   "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29060059545",
+   "created_at": "2026-07-10T00:28:55Z",
+   "updated_at": "2026-07-10T00:29:39Z",
+   "actor": "jhinpan",
+   "jobs": [
+    {
+     "runner": "linux-flydsl-mi355-1",
+     "arch": "gfx950",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-10T00:29:39Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29060059545/job/86259846789"
+    },
+    {
+     "runner": "linux-flydsl-mi325-1",
+     "arch": "gfx942",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-10T00:29:39Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29060059545/job/86259846803"
+    },
+    {
+     "runner": "linux-flydsl-navi-2",
+     "arch": "gfx1201",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-10T00:29:39Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29060059545/job/86259846811"
+    }
+   ]
+  },
   {
    "run_id": 28824577383,
    "pr": null,
