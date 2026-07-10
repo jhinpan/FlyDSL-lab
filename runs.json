@@ -1,8 +1,66 @@
 {
  "schema": 1,
- "updated": "2026-07-10T15:05:05Z",
+ "updated": "2026-07-10T17:12:05Z",
  "repo": "jhinpan/FlyDSL-lab",
  "runs": [
+  {
+   "run_id": 29103985874,
+   "pr": 2,
+   "commit": "ce8ce9c892a7f6c6fec4d93086509139e393dbf0",
+   "branch": "feat/profile-tools",
+   "event": "pull_request",
+   "title": "[Feature] Extract reusable event-based benchmarking helper",
+   "status": "queued",
+   "conclusion": null,
+   "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874",
+   "created_at": "2026-07-10T15:31:28Z",
+   "updated_at": "2026-07-10T15:32:11Z",
+   "actor": "jhinpan",
+   "jobs": [
+    {
+     "runner": "linux-flydsl-mi355-1",
+     "arch": "gfx950",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-10T15:32:11Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874/job/86399880380"
+    },
+    {
+     "runner": "linux-flydsl-mi325-1",
+     "arch": "gfx942",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-10T15:32:11Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874/job/86399880402"
+    },
+    {
+     "runner": "linux-flydsl-navi-2",
+     "arch": "gfx1201",
+     "status": "queued",
+     "conclusion": null,
+     "started_at": "2026-07-10T15:32:11Z",
+     "completed_at": null,
+     "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874/job/86399880422"
+    }
+   ]
+  },
+  {
+   "run_id": 29103734899,
+   "pr": null,
+   "commit": "c1b52184b195b7377714e0ba662cadac0e1bc4e8",
+   "branch": "main",
+   "event": "push",
+   "title": "[rmsnorm] Add fused-add / residual backward (PR 2/3, #769) (#800)",
+   "status": "pending",
+   "conclusion": null,
+   "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103734899",
+   "created_at": "2026-07-10T15:27:29Z",
+   "updated_at": "2026-07-10T15:27:30Z",
+   "actor": "jhinpan",
+   "jobs": []
+  },
   {
    "run_id": 29060059545,
    "pr": null,
