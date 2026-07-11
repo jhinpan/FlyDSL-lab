@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-07-11T13:57:29Z",
+ "updated": "2026-07-11T15:32:29Z",
  "repo": "jhinpan/FlyDSL-lab",
  "runs": [
   {
@@ -10,38 +10,38 @@
    "branch": "feat/profile-tools",
    "event": "pull_request",
    "title": "[Feature] Extract reusable event-based benchmarking helper",
-   "status": "queued",
-   "conclusion": null,
+   "status": "completed",
+   "conclusion": "cancelled",
    "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874",
    "created_at": "2026-07-10T15:31:28Z",
-   "updated_at": "2026-07-10T15:32:11Z",
+   "updated_at": "2026-07-11T15:32:12Z",
    "actor": "jhinpan",
    "jobs": [
     {
      "runner": "linux-flydsl-mi355-1",
      "arch": "gfx950",
-     "status": "queued",
-     "conclusion": null,
+     "status": "completed",
+     "conclusion": "cancelled",
      "started_at": "2026-07-10T15:32:11Z",
-     "completed_at": null,
+     "completed_at": "2026-07-11T15:32:12Z",
      "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874/job/86399880380"
     },
     {
      "runner": "linux-flydsl-mi325-1",
      "arch": "gfx942",
-     "status": "queued",
-     "conclusion": null,
+     "status": "completed",
+     "conclusion": "cancelled",
      "started_at": "2026-07-10T15:32:11Z",
-     "completed_at": null,
+     "completed_at": "2026-07-11T15:32:12Z",
      "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874/job/86399880402"
     },
     {
      "runner": "linux-flydsl-navi-2",
      "arch": "gfx1201",
-     "status": "queued",
-     "conclusion": null,
+     "status": "completed",
+     "conclusion": "cancelled",
      "started_at": "2026-07-10T15:32:11Z",
-     "completed_at": null,
+     "completed_at": "2026-07-11T15:32:12Z",
      "url": "https://github.com/jhinpan/FlyDSL-lab/actions/runs/29103985874/job/86399880422"
     }
    ]
