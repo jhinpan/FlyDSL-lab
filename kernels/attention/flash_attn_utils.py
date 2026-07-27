@@ -1705,6 +1705,9 @@ class DualwaveSwpFp8Traits:
     BN128_VMCNT: int
     BN128_NOBRANCH: bool
     BN128_PCARRY: bool
+    BN128_PFDIST: int
+    BN128_QGLOBAL: bool
+    LDS_Q_SIZE: int
     QREG: bool
     VDMA: bool
     DEFAULT_STRIDE_Q_N: int
@@ -1786,6 +1789,9 @@ class DualwaveSwpFp8Traits:
             self.BN128_VMCNT,
             self.BN128_NOBRANCH,
             self.BN128_PCARRY,
+            self.BN128_PFDIST,
+            self.BN128_QGLOBAL,
+            self.LDS_Q_SIZE,
             self.QREG,
             self.VDMA,
         )
@@ -1854,8 +1860,15 @@ def _make_dualwave_swp_fp8_traits(
     bn128_sched = tuple(int(x) for x in os.getenv("FLYDSL_FA_BN128_SCHED", "8,16,8,25").split(","))
     qreg = bn128_pf
     vdma = bn128_pf
+    # With QREG the LDS Q tile is written once in the prologue and read once into
+    # 16 VGPR/lane, so it can be dropped in favour of reading Q straight from
+    # global. That frees BLOCK_M*HEAD_DIM bytes of LDS for a deeper KV ring.
+    bn128_qglobal = qreg and os.getenv("FLYDSL_FA_BN128_QGLOBAL", "0") == "1"
+    lds_q_size = 16 if bn128_qglobal else block_m * head_dim
     deep_ring = bn128
     num_prefetch_k = (6 if bn128_pf else 4) if deep_ring else 2
+    if deep_ring:
+        num_prefetch_k = int(os.getenv("FLYDSL_FA_BN128_NPF", str(num_prefetch_k)))
     # In the fp8-direct path V lives in the separate `vt` region, so the KV ring's V
     # half is dead; the NPF=6 ring reclaims it to fit the 160KB LDS cap.
     if bn128_pf:
@@ -1947,6 +1960,9 @@ def _make_dualwave_swp_fp8_traits(
         BN128_VMCNT=int(os.getenv("FLYDSL_FA_BN128_VMCNT", "-1")),
         BN128_NOBRANCH=bool(bn128 and os.getenv("FLYDSL_FA_BN128_NOBRANCH", "0") == "1"),
         BN128_PCARRY=bool(bn128 and os.getenv("FLYDSL_FA_BN128_PCARRY", "0") == "1"),
+        BN128_PFDIST=int(os.getenv("FLYDSL_FA_BN128_PFDIST", "2")),
+        BN128_QGLOBAL=bool(bn128_qglobal),
+        LDS_Q_SIZE=int(lds_q_size),
         QREG=bool(qreg),
         VDMA=bool(vdma),
         DEFAULT_STRIDE_Q_N=default_stride_q_n,
@@ -4684,9 +4700,26 @@ class DualwaveFp8GemmHelper(DualwaveFp8KernelContext):
             packs.append(self.read_i32x8_lds(self.lds_q_base_ptr, fx.Int32(byte_row)))
         return packs
 
+    def _load_q_wide_global(self):
+        # Read the Q operand packs straight from global. Only worth doing when the
+        # packs are hoisted out of the loop (QREG): the LDS Q tile then exists purely
+        # to feed one read per lane, and skipping it frees BLOCK_M*HEAD_DIM bytes of
+        # LDS for the KV ring. 32 contiguous fp8 = two 128-bit loads -> i32x8.
+        traits = self.traits
+        d_base = self.lane_div_32 * 32
+        packs = []
+        for ws in range_constexpr(traits.HEAD_DIM // 64):
+            g_idx = self.q_gmem_elem_offset + self.ctx_ref.q_row_in_block * self.stride_q_n_v + ws * 64 + d_base
+            lo = Vec(self.buffer_load_128(g_idx), (4,), fx.Int32)
+            hi = Vec(self.buffer_load_128(g_idx + 16), (4,), fx.Int32)
+            packs.append(lo.shuffle(hi, [0, 1, 2, 3, 4, 5, 6, 7]).ir_value())
+        return packs
+
     def load_q_wide(self):
         # Read the Q operand packs once outside the main loop, so `qk(v_k, q_wide)` can
         # skip its per-iteration LDS re-read (traits.QREG).
+        if const_expr(self.traits.BN128_QGLOBAL):
+            return self._load_q_wide_global()
         return self._load_q_wide_lds()
 
     def qk(self, v_k, q_wide=None):

@@ -114,7 +114,7 @@ def build_flash_attn_dualwave_swp_fp8_module(
         vt: fx.Array[fx.BFloat16, traits.VT_BF16_TOTAL, 16]
         # Q tile (BLOCK_M x HEAD_DIM fp8, row-major). Staged once at prologue so QK
         # reads Q from LDS instead of pinning ~16 VGPR/lane live across the whole loop.
-        q: fx.Array[_lds_elem_dtype, BLOCK_M * HEAD_DIM, 16]
+        q: fx.Array[_lds_elem_dtype, traits.LDS_Q_SIZE, 16]
 
     @flyc.kernel(known_block_size=[BLOCK_SIZE, 1, 1])
     def flash_attn_dualwave_swp_fp8_gfx950_kernel(
@@ -989,7 +989,8 @@ def build_flash_attn_dualwave_swp_fp8_module(
         # dominates the gap to aiter. QK must consume a FRESH read (short live range);
         # carrying the prefetched K into QK instead serializes on the yield and spills.
         kv_gmem_to_lds.load_k(t0 * BN, t0 % fx.Index(NPF))
-        q_loader.stage_q_to_lds()
+        if const_expr(not traits.BN128_QGLOBAL):
+            q_loader.stage_q_to_lds()
         rocdl.s_waitcnt(0)
         rocdl.sched_barrier(0)
         rocdl.s_barrier()
@@ -1009,12 +1010,18 @@ def build_flash_attn_dualwave_swp_fp8_module(
         kv_gmem_to_lds.load_k((t0 + 1) * BN, (t0 + 1) % fx.Index(NPF))
         kv_gmem_to_lds.load_v(t0 * BN, t0 % fx.Index(NPF))
         kv_gmem_to_lds.load_v((t0 + 1) * BN, (t0 + 1) % fx.Index(NPF))
-        if const_expr(not traits.BN128_PCARRY):
+        if const_expr(not traits.BN128_PCARRY or traits.BN128_PFDIST == 2):
             kv_gmem_to_lds.load_k((t0 + 2) * BN, (t0 + 2) % fx.Index(NPF))
             kv_gmem_to_lds.load_k((t0 + 3) * BN, (t0 + 3) % fx.Index(NPF))
             kv_gmem_to_lds.load_v((t0 + 2) * BN, (t0 + 2) % fx.Index(NPF))
             kv_gmem_to_lds.load_v((t0 + 3) * BN, (t0 + 3) % fx.Index(NPF))
-        rocdl.s_waitcnt(0)
+        if const_expr(traits.BN128_VMCNT >= 0 and not traits.BN128_PCARRY):
+            # The second staged pair is not read until the third loop trip, so only the
+            # first pair has to have landed here. ATT puts ~2k cycles per wave on this
+            # single drain, which is pure prologue latency on the critical path.
+            _waitcnt_vm_n(4)
+        else:
+            rocdl.s_waitcnt(0)
         rocdl.sched_barrier(0)
         if const_expr(traits.BN128_STAGGER):
             # OPEN the phase shift: group B takes one extra barrier so that from here
@@ -1082,7 +1089,7 @@ def build_flash_attn_dualwave_swp_fp8_module(
             v_s_b = _mask_sub(v_s_b, j + fx.Index(1))
             v_s_a, v_s_b = _mask_pair(v_s_a, v_s_b, j)
 
-            if const_expr(traits.BN128_STAGGER):
+            if const_expr(traits.BN128_STAGGER and not traits.BN128_PCARRY):
                 # End of the matrix phase. Under the shift the other group is inside
                 # its vector phase here, so its softmax VALU issues against these QK
                 # MFMAs instead of waiting behind them.
@@ -1106,13 +1113,16 @@ def build_flash_attn_dualwave_swp_fp8_module(
             # its own sub-tile, which breaks up the largest LDS burst in the loop and
             # keeps v_v_b's 32 VGPRs out of the a-sub-tile's live range.
             if const_expr(traits.BN128_PCARRY):
-                # Prefetch only one pair ahead: with the P carry, the previous pair's V
-                # must survive into this trip, so the 3-pair ring holds {prev, current,
-                # in-flight} and has no room for a second pair of lookahead.
-                kv_gmem_to_lds.load_k((j + fx.Index(2)) * BN, nn_a_buf)
-                kv_gmem_to_lds.load_k((j + fx.Index(3)) * BN, nn_b_buf)
-                kv_gmem_to_lds.load_v((j + fx.Index(2)) * BN, nn_a_buf)
-                kv_gmem_to_lds.load_v((j + fx.Index(3)) * BN, nn_b_buf)
+                # The P carry keeps the previous pair's V alive, so the ring must hold
+                # {prev, current} plus PFDIST pairs in flight. At NPF=6 that caps the
+                # lookahead at one pair; freeing the Q tile buys NPF=8 and restores two.
+                pc_d = const_expr(2 * traits.BN128_PFDIST)
+                pc_a = f_a_buf if const_expr(traits.BN128_PFDIST == 2) else nn_a_buf
+                pc_b = f_b_buf if const_expr(traits.BN128_PFDIST == 2) else nn_b_buf
+                kv_gmem_to_lds.load_k((j + fx.Index(pc_d)) * BN, pc_a)
+                kv_gmem_to_lds.load_k((j + fx.Index(pc_d + 1)) * BN, pc_b)
+                kv_gmem_to_lds.load_v((j + fx.Index(pc_d)) * BN, pc_a)
+                kv_gmem_to_lds.load_v((j + fx.Index(pc_d + 1)) * BN, pc_b)
 
                 # PV of the PREVIOUS pair. This is the only MFMA work in the body that
                 # does not sit on this pair's QK -> max -> exp2 chain, so it is what the
@@ -1120,6 +1130,17 @@ def build_flash_attn_dualwave_swp_fp8_module(
                 v_o = gemm_helper.pv(p_carry_a, kv_lds_to_regs.load_v(pv_a_buf), v_o)
                 v_o = gemm_helper.pv(p_carry_b, kv_lds_to_regs.load_v(pv_b_buf), v_o)
                 v_o = softmax_helper.anchor_v_o(v_o)
+
+                if const_expr(traits.BN128_STAGGER):
+                    # End of the matrix phase: 16 MFMA (PV of the previous pair plus
+                    # this pair's QK) against the other group's pure-softmax phase.
+                    # Splitting here rather than after QK is what keeps the two phases
+                    # close enough in length that the barrier rendezvous stays cheap.
+                    # The prefetch above targets pair p+1 while the trailing group is
+                    # reading pairs p-1 and p, so the ring stays race-free at NPF=6.
+                    rocdl.sched_barrier(0)
+                    rocdl.s_barrier()
+                    rocdl.sched_barrier(0)
             else:
                 v_v_a = kv_lds_to_regs.load_v(a_buf)
 
@@ -1127,10 +1148,16 @@ def build_flash_attn_dualwave_swp_fp8_module(
                 # this last: hoisting it to the top of the body measured -1.5%, since
                 # the DMAs compete with the QK ds_reads for the same memory-issue slots.
                 if const_expr(not traits.BN128_STAGGER):
-                    kv_gmem_to_lds.load_k((j + fx.Index(4)) * BN, f_a_buf)
-                    kv_gmem_to_lds.load_k((j + fx.Index(5)) * BN, f_b_buf)
-                    kv_gmem_to_lds.load_v((j + fx.Index(4)) * BN, f_a_buf)
-                    kv_gmem_to_lds.load_v((j + fx.Index(5)) * BN, f_b_buf)
+                    # PFDIST picks how many pairs ahead the DMA runs. P-carry is forced
+                    # down to one pair by the ring, so this knob isolates the cost of
+                    # that shortening from P-carry's other effects.
+                    d0 = const_expr(2 * traits.BN128_PFDIST)
+                    pf_a = nn_a_buf if const_expr(traits.BN128_PFDIST == 1) else f_a_buf
+                    pf_b = _ring_wrap(nn_a_buf + fx.Index(1)) if const_expr(traits.BN128_PFDIST == 1) else f_b_buf
+                    kv_gmem_to_lds.load_k((j + fx.Index(d0)) * BN, pf_a)
+                    kv_gmem_to_lds.load_k((j + fx.Index(d0 + 1)) * BN, pf_b)
+                    kv_gmem_to_lds.load_v((j + fx.Index(d0)) * BN, pf_a)
+                    kv_gmem_to_lds.load_v((j + fx.Index(d0 + 1)) * BN, pf_b)
 
             m_tile = _merge_tile_max(v_s_a, v_s_b)
             if const_expr(traits.BN128_NOBRANCH):
