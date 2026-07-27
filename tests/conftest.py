@@ -6,6 +6,7 @@
 Supports both the new Fly dialect (build-fly/) and legacy build paths.
 """
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -40,6 +41,28 @@ if _src_py_dir.exists() and (_src_py_dir / "flydsl").exists():
     _p = str(_src_py_dir)
     if _p not in sys.path:
         sys.path.append(_p)
+
+
+def _flydsl_origin():
+    """Directory `import flydsl` resolves to, or None if it is not importable.
+
+    None of the paths above point at `python/`, so an unbuilt checkout silently
+    falls back to whatever `flydsl` is installed system-wide. `pip install -e .`
+    is what links this checkout in (it symlinks `python/flydsl/_mlir` at the
+    build output); without it the suite exercises a foreign package.
+    """
+    try:
+        spec = importlib.util.find_spec("flydsl")
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.origin:
+        return None
+    return Path(spec.origin).resolve().parent
+
+
+def _flydsl_is_in_repo(origin):
+    return origin is not None and _repo_root in origin.parents
+
 
 # Try importing new or old context setup
 _ensure_extensions = None
@@ -110,11 +133,35 @@ def pytest_addoption(parser):
     )
 
 
+def pytest_report_header(config):
+    """Report which flydsl the suite is about to exercise."""
+    origin = _flydsl_origin()
+    if origin is None:
+        return "flydsl: not importable"
+    if _flydsl_is_in_repo(origin):
+        return f"flydsl: {origin}"
+    return f"flydsl: {origin} (outside this checkout)"
+
+
 def pytest_configure(config):
     """Apply FlyDSL env overrides from CLI options.
 
     Note: marker registration lives in pytest.ini (single source of truth).
     """
+    origin = _flydsl_origin()
+    if origin is not None and not _flydsl_is_in_repo(origin):
+        # The header is suppressed under -q, so warn as well: a run against a
+        # foreign flydsl reports results that have nothing to do with the
+        # working tree, which is far more confusing than an import error.
+        config.issue_config_time_warning(
+            pytest.PytestConfigWarning(
+                f"`import flydsl` resolves to {origin}, outside {_repo_root}. "
+                f"This run does not exercise your working tree. "
+                f"Run `pip install -e .` in this checkout, or set PYTHONPATH to its `python/` directory."
+            ),
+            stacklevel=2,
+        )
+
     backend = config.getoption("--flydsl-compile-backend")
     arch = config.getoption("--flydsl-compile-arch")
     # Intentionally set process-level env vars so downstream code (env.py)
