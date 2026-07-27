@@ -1004,6 +1004,10 @@ def build_flash_attn_dualwave_swp_fp8_module(
         kv_gmem_to_lds.load_v((t0 + 3) * BN, (t0 + 3) % fx.Index(NPF))
         rocdl.s_waitcnt(0)
         rocdl.sched_barrier(0)
+        if const_expr(traits.BN128_STAGGER):
+            # OPEN the phase shift: group B takes one extra barrier so that from here
+            # on it trails group A by exactly one of the body's two phases.
+            _stagger_extra_barrier_if_one(ctx.stagger_i32)
         rocdl.s_barrier()
         rocdl.sched_barrier(0)
 
@@ -1053,6 +1057,21 @@ def build_flash_attn_dualwave_swp_fp8_module(
             v_s_b = _mask_sub(v_s_b, j + fx.Index(1))
             v_s_a, v_s_b = _mask_pair(v_s_a, v_s_b, j)
 
+            if const_expr(traits.BN128_STAGGER):
+                # End of the matrix phase. Under the shift the other group is inside
+                # its vector phase here, so its softmax VALU issues against these QK
+                # MFMAs instead of waiting behind them.
+                rocdl.sched_barrier(0)
+                rocdl.s_barrier()
+                rocdl.sched_barrier(0)
+                # The prefetch must be issued in the vector phase: at this point the
+                # trailing group is still reading ring slots {j, j+1}, which is exactly
+                # where the {j+4, j+5} DMA of the *next* iteration lands (NPF=6).
+                kv_gmem_to_lds.load_k((j + fx.Index(4)) * BN, f_a_buf)
+                kv_gmem_to_lds.load_k((j + fx.Index(5)) * BN, f_b_buf)
+                kv_gmem_to_lds.load_v((j + fx.Index(4)) * BN, f_a_buf)
+                kv_gmem_to_lds.load_v((j + fx.Index(5)) * BN, f_b_buf)
+
             # V reads for the current pair, issued AFTER the QK MFMAs so their
             # latency hides behind the softmax. With the V reads first, their 64 live
             # VGPRs push the QK region over the register limit and the scheduler
@@ -1066,10 +1085,11 @@ def build_flash_attn_dualwave_swp_fp8_module(
             # DMA pair {j+4,j+5} (2 pairs ahead) into the far ring buffers. Keep this
             # last: hoisting it to the top of the body measured -1.5%, since the DMAs
             # compete with the QK ds_reads for the same memory-issue slots.
-            kv_gmem_to_lds.load_k((j + fx.Index(4)) * BN, f_a_buf)
-            kv_gmem_to_lds.load_k((j + fx.Index(5)) * BN, f_b_buf)
-            kv_gmem_to_lds.load_v((j + fx.Index(4)) * BN, f_a_buf)
-            kv_gmem_to_lds.load_v((j + fx.Index(5)) * BN, f_b_buf)
+            if const_expr(not traits.BN128_STAGGER):
+                kv_gmem_to_lds.load_k((j + fx.Index(4)) * BN, f_a_buf)
+                kv_gmem_to_lds.load_k((j + fx.Index(5)) * BN, f_b_buf)
+                kv_gmem_to_lds.load_v((j + fx.Index(4)) * BN, f_a_buf)
+                kv_gmem_to_lds.load_v((j + fx.Index(5)) * BN, f_b_buf)
 
             m_tile = _merge_tile_max(v_s_a, v_s_b)
             v_o, m_new, l_row = softmax_helper.lazy_correct_o(v_o, m_row, l_row, m_tile)
@@ -1080,9 +1100,20 @@ def build_flash_attn_dualwave_swp_fp8_module(
             v_o, l_row = _subtile_tail(v_s_b, v_v_b, v_o, l_row, m_new)
             m_row = m_new
 
-            _sched_barrier_exp_pairs(traits, 8, 16, 11)
-            _sched_barrier_pairs(traits, 8, 25, 11)
-            rocdl.s_waitcnt(0)
+            # The softmax/PV region holds exactly D_CHUNKS*2 = 8 wide fp8 MFMA (PV for
+            # both sub-tiles). Asking for more MFMA groups than exist makes the
+            # scheduler reserve slots for MFMAs that never arrive and leave the VALU
+            # unpacked, so the two group counts must sum to 8.
+            _sched_barrier_exp_pairs(traits, traits.BN128_SCHED[0], traits.BN128_SCHED[1], 11)
+            _sched_barrier_pairs(traits, traits.BN128_SCHED[2], traits.BN128_SCHED[3], 11)
+            if const_expr(traits.BN128_VMCNT >= 0):
+                # The {j+4, j+5} DMA issued above is not read until iteration j+4, two
+                # loop trips away, so draining it here (s_waitcnt 0) puts a full HBM
+                # latency on the critical path for nothing. Retiring in order, vmcnt(N)
+                # still guarantees every earlier iteration's DMA has landed.
+                _waitcnt_vm_n(traits.BN128_VMCNT)
+            else:
+                rocdl.s_waitcnt(0)
             rocdl.sched_barrier(0)
             rocdl.s_barrier()
             rocdl.sched_barrier(0)
@@ -1099,7 +1130,11 @@ def build_flash_attn_dualwave_swp_fp8_module(
         if const_expr(traits.FP8_PV):
             inv_l = ArithValue(inv_l) * ctx.vd_fp8
         softmax_helper.scale_o(v_o, inv_l)
-        rocdl.s_barrier()
+        if const_expr(traits.BN128_STAGGER):
+            # CLOSE the phase shift so both groups leave the loop aligned.
+            _stagger_extra_barrier_if_zero(ctx.stagger_i32)
+        else:
+            rocdl.s_barrier()
         output_store.store_final_o(v_o, q_row)
 
     # Combine kernel: out = sum_s w_s * O_s / sum_s w_s * l_s, w_s = exp2(m_s - m_max).

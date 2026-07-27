@@ -422,6 +422,9 @@ def _sub_score_pair(v_s, row_max, fm_fast):
     return Vec.from_elements(lo_sub, fx.Float32).ir_value(), Vec.from_elements(hi_sub, fx.Float32).ir_value()
 
 
+_PACKED_SOFTMAX_FMA = os.getenv("FLYDSL_FA_PACKED_SOFTMAX", "0") == "1"
+
+
 def _scale_sub_score_pair(v_s, row_max_raw, scale, zero_f, fm_fast):
     """Fused softmax-scale + row-max subtraction (optimization 1-A).
 
@@ -433,6 +436,15 @@ def _scale_sub_score_pair(v_s, row_max_raw, scale, zero_f, fm_fast):
     """
     s_lo, s_hi = v_s
     neg_scaled_max = _fsub(zero_f, _fmul(scale, row_max_raw, fm_fast), fm_fast)
+    if _PACKED_SOFTMAX_FMA:
+        # One 16-wide math.fma per half instead of 16 scalar ones: the backend pairs
+        # adjacent accumulator VGPRs into v_pk_fma_f32, halving the instruction count
+        # of the largest straight-line VALU block in the loop.
+        scale_v = Vec.from_elements([scale], fx.Float32).broadcast_to(16)
+        bias_v = Vec.from_elements([neg_scaled_max], fx.Float32).broadcast_to(16)
+        lo_v = fmath.fma(Vec(s_lo), scale_v, bias_v, fastmath=fm_fast)
+        hi_v = fmath.fma(Vec(s_hi), scale_v, bias_v, fastmath=fm_fast)
+        return Vec(lo_v).ir_value(), Vec(hi_v).ir_value()
     lo = [fmath.fma(s_lo[r], scale, neg_scaled_max, fastmath=fm_fast) for r in range_constexpr(16)]
     hi = [fmath.fma(s_hi[r], scale, neg_scaled_max, fastmath=fm_fast) for r in range_constexpr(16)]
     return Vec.from_elements(lo, fx.Float32).ir_value(), Vec.from_elements(hi, fx.Float32).ir_value()
@@ -1687,6 +1699,10 @@ class DualwaveSwpFp8Traits:
     FP8_PV_DIRECT: bool
     BN128: bool
     BN128_PF: bool
+    BN128_STAGGER: bool
+    BN128_SCHED: tuple[int, int, int, int]
+    PACKED_SOFTMAX: bool
+    BN128_VMCNT: int
     QREG: bool
     VDMA: bool
     DEFAULT_STRIDE_Q_N: int
@@ -1762,6 +1778,10 @@ class DualwaveSwpFp8Traits:
             self.NUM_PREFETCH_K,
             self.BN128,
             self.BN128_PF,
+            self.BN128_STAGGER,
+            self.BN128_SCHED,
+            self.PACKED_SOFTMAX,
+            self.BN128_VMCNT,
             self.QREG,
             self.VDMA,
         )
@@ -1820,8 +1840,14 @@ def _make_dualwave_swp_fp8_traits(
     # Two BLOCK_N=64 KV tiles per loop iteration under a single merged online-softmax
     # correction. Requires a dense contiguous KV range and stores final O directly, so
     # split-KV and varlen keep the 8-cluster kernel.
-    bn128 = (num_kv_splits <= 1) and (not varlen)
+    bn128 = (num_kv_splits <= 1) and (not varlen) and os.getenv("FLYDSL_FA_BN128", "1") == "1"
     bn128_pf = bn128
+    # Split the BN128 body into a matrix phase (QK) and a vector phase (softmax + PV)
+    # separated by a barrier, and phase-shift the two wave groups by one barrier. Group
+    # A's QK MFMAs then run while group B is in softmax, so the matrix and vector pipes
+    # are busy at the same time instead of alternating workgroup-wide.
+    bn128_stagger = bn128 and dualwave_swp_enable_stagger and os.getenv("FLYDSL_FA_BN128_STAGGER", "0") == "1"
+    bn128_sched = tuple(int(x) for x in os.getenv("FLYDSL_FA_BN128_SCHED", "8,16,8,25").split(","))
     qreg = bn128_pf
     vdma = bn128_pf
     deep_ring = bn128
@@ -1911,6 +1937,10 @@ def _make_dualwave_swp_fp8_traits(
         FP8_PV_DIRECT=bool(fp8_pv_direct),
         BN128=bool(bn128),
         BN128_PF=bool(bn128_pf),
+        BN128_STAGGER=bool(bn128_stagger),
+        BN128_SCHED=bn128_sched,
+        PACKED_SOFTMAX=_PACKED_SOFTMAX_FMA,
+        BN128_VMCNT=int(os.getenv("FLYDSL_FA_BN128_VMCNT", "-1")),
         QREG=bool(qreg),
         VDMA=bool(vdma),
         DEFAULT_STRIDE_Q_N=default_stride_q_n,
