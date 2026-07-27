@@ -1703,6 +1703,8 @@ class DualwaveSwpFp8Traits:
     BN128_SCHED: tuple[int, int, int, int]
     PACKED_SOFTMAX: bool
     BN128_VMCNT: int
+    BN128_NOBRANCH: bool
+    BN128_PCARRY: bool
     QREG: bool
     VDMA: bool
     DEFAULT_STRIDE_Q_N: int
@@ -1782,6 +1784,8 @@ class DualwaveSwpFp8Traits:
             self.BN128_SCHED,
             self.PACKED_SOFTMAX,
             self.BN128_VMCNT,
+            self.BN128_NOBRANCH,
+            self.BN128_PCARRY,
             self.QREG,
             self.VDMA,
         )
@@ -1941,6 +1945,8 @@ def _make_dualwave_swp_fp8_traits(
         BN128_SCHED=bn128_sched,
         PACKED_SOFTMAX=_PACKED_SOFTMAX_FMA,
         BN128_VMCNT=int(os.getenv("FLYDSL_FA_BN128_VMCNT", "-1")),
+        BN128_NOBRANCH=bool(bn128 and os.getenv("FLYDSL_FA_BN128_NOBRANCH", "0") == "1"),
+        BN128_PCARRY=bool(bn128 and os.getenv("FLYDSL_FA_BN128_PCARRY", "0") == "1"),
         QREG=bool(qreg),
         VDMA=bool(vdma),
         DEFAULT_STRIDE_Q_N=default_stride_q_n,
@@ -4728,6 +4734,11 @@ class DualwaveFp8GemmHelper(DualwaveFp8KernelContext):
         for dc in range_constexpr(self.traits.D_CHUNKS):
             v_o[dc] = self._mfma_acc_bf16(v_pk[dc], p_pk, v_o[dc])
         return v_o
+
+    def zero_p_fp8(self):
+        # All-zero fp8 A-operand. Seeds the P carry so the first loop trip's PV adds
+        # nothing, which removes the need to peel a prologue iteration.
+        return Vec.from_elements([fx.Int32(0) for _ in range_constexpr(8)], fx.Int32).ir_value()
 
     def cast_p_fp8_direct(self, v_p):
         # Pack the raw softmax f32 probabilities straight into the fp8 K=64 A-operand

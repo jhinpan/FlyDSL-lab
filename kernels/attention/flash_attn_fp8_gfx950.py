@@ -949,11 +949,21 @@ def build_flash_attn_dualwave_swp_fp8_module(
             v_o = softmax_helper.anchor_v_o(v_o)
             return v_o, l_row
 
+        def _softmax_only(v_s, l_row, m_new):
+            # P-carry variant of _subtile_tail: produce the fp8 P operand for this
+            # sub-tile but leave its PV to the next iteration, where it becomes the
+            # only MFMA work independent of that iteration's QK -> max -> exp chain.
+            v_s = softmax_helper.sub_m(v_s, m_new)
+            v_p = softmax_helper.exp2(v_s, 0, 16)
+            v_p = softmax_helper.exp2(v_p, 16, 16)
+            l_row = softmax_helper.reduce_sum(l_row, v_p)
+            return gemm_helper.cast_p_fp8_direct(v_p), l_row
+
         # Non-causal masks each sub-tile right after its own QK; causal masks the pair
         # under one branch after both QKs and needs no pad mask at all (causal subsumes
         # it). Exactly one of the two is live, so neither mode pays for the other.
         def _mask_sub(v_s, tile_idx):
-            if const_expr(traits.CAUSAL):
+            if const_expr(traits.CAUSAL or traits.BN128_NOBRANCH):
                 return v_s
             return softmax_helper.seq_pad_mask_if_needed(v_s, tile_idx)
 
@@ -994,14 +1004,16 @@ def build_flash_attn_dualwave_swp_fp8_module(
         q_wide = gemm_helper.load_q_wide() if const_expr(traits.QREG) else None
 
         # Prologue stages TWO pairs ({t0,t0+1} and {t0+2,t0+3}) so the 2-ahead DMA
-        # cadence is primed before the loop body's first read.
+        # cadence is primed before the loop body's first read. The P-carry schedule
+        # only looks one pair ahead, so it primes just the first pair.
         kv_gmem_to_lds.load_k((t0 + 1) * BN, (t0 + 1) % fx.Index(NPF))
         kv_gmem_to_lds.load_v(t0 * BN, t0 % fx.Index(NPF))
         kv_gmem_to_lds.load_v((t0 + 1) * BN, (t0 + 1) % fx.Index(NPF))
-        kv_gmem_to_lds.load_k((t0 + 2) * BN, (t0 + 2) % fx.Index(NPF))
-        kv_gmem_to_lds.load_k((t0 + 3) * BN, (t0 + 3) % fx.Index(NPF))
-        kv_gmem_to_lds.load_v((t0 + 2) * BN, (t0 + 2) % fx.Index(NPF))
-        kv_gmem_to_lds.load_v((t0 + 3) * BN, (t0 + 3) % fx.Index(NPF))
+        if const_expr(not traits.BN128_PCARRY):
+            kv_gmem_to_lds.load_k((t0 + 2) * BN, (t0 + 2) % fx.Index(NPF))
+            kv_gmem_to_lds.load_k((t0 + 3) * BN, (t0 + 3) % fx.Index(NPF))
+            kv_gmem_to_lds.load_v((t0 + 2) * BN, (t0 + 2) % fx.Index(NPF))
+            kv_gmem_to_lds.load_v((t0 + 3) * BN, (t0 + 3) % fx.Index(NPF))
         rocdl.s_waitcnt(0)
         rocdl.sched_barrier(0)
         if const_expr(traits.BN128_STAGGER):
@@ -1030,6 +1042,13 @@ def build_flash_attn_dualwave_swp_fp8_module(
         # The ring slot rides the loop-carry, so the first ds_read address at
         # the top of the body needs no scalar work at all.
         init_args = [m_row, l_row] + v_o + [t0 % fx.Index(NPF)]
+        if const_expr(traits.BN128_PCARRY):
+            # Two extra carries: the previous pair's fp8 P operands, plus the ring slot
+            # their V lives in. Seeding P with zeros makes the first trip's PV a no-op,
+            # so the prev-V slot can point at the current (already staged) pair rather
+            # than at an unwritten one.
+            zero_p = gemm_helper.zero_p_fp8()
+            init_args = init_args + [t0 % fx.Index(NPF), zero_p, zero_p]
         loop_results = init_args
         for j, loop_args in range(fx.Index(t0), t_end, fx.Index(2), init=init_args):
             m_row = loop_args[0]
@@ -1046,6 +1065,12 @@ def build_flash_attn_dualwave_swp_fp8_module(
             nn_a_buf = _ring_wrap(a_buf + fx.Index(2))
             f_a_buf = _ring_wrap(a_buf + fx.Index(4))
             f_b_buf = _ring_wrap(a_buf + fx.Index(5))
+            if const_expr(traits.BN128_PCARRY):
+                nn_b_buf = _ring_wrap(a_buf + fx.Index(3))
+                pv_a_buf = loop_args[3 + D_CHUNKS]
+                pv_b_buf = _ring_wrap(pv_a_buf + fx.Index(1))
+                p_carry_a = loop_args[4 + D_CHUNKS]
+                p_carry_b = loop_args[5 + D_CHUNKS]
 
             # Fresh K read for QK (short live range; does not use the carry).
             v_k_a = kv_lds_to_regs.load_k(a_buf)
@@ -1080,32 +1105,76 @@ def build_flash_attn_dualwave_swp_fp8_module(
             # ds_read_b64_tr_b8 issue here; the b-tile's are deferred to just before
             # its own sub-tile, which breaks up the largest LDS burst in the loop and
             # keeps v_v_b's 32 VGPRs out of the a-sub-tile's live range.
-            v_v_a = kv_lds_to_regs.load_v(a_buf)
+            if const_expr(traits.BN128_PCARRY):
+                # Prefetch only one pair ahead: with the P carry, the previous pair's V
+                # must survive into this trip, so the 3-pair ring holds {prev, current,
+                # in-flight} and has no room for a second pair of lookahead.
+                kv_gmem_to_lds.load_k((j + fx.Index(2)) * BN, nn_a_buf)
+                kv_gmem_to_lds.load_k((j + fx.Index(3)) * BN, nn_b_buf)
+                kv_gmem_to_lds.load_v((j + fx.Index(2)) * BN, nn_a_buf)
+                kv_gmem_to_lds.load_v((j + fx.Index(3)) * BN, nn_b_buf)
 
-            # DMA pair {j+4,j+5} (2 pairs ahead) into the far ring buffers. Keep this
-            # last: hoisting it to the top of the body measured -1.5%, since the DMAs
-            # compete with the QK ds_reads for the same memory-issue slots.
-            if const_expr(not traits.BN128_STAGGER):
-                kv_gmem_to_lds.load_k((j + fx.Index(4)) * BN, f_a_buf)
-                kv_gmem_to_lds.load_k((j + fx.Index(5)) * BN, f_b_buf)
-                kv_gmem_to_lds.load_v((j + fx.Index(4)) * BN, f_a_buf)
-                kv_gmem_to_lds.load_v((j + fx.Index(5)) * BN, f_b_buf)
+                # PV of the PREVIOUS pair. This is the only MFMA work in the body that
+                # does not sit on this pair's QK -> max -> exp2 chain, so it is what the
+                # scheduler can interleave with the 64 exp2 below.
+                v_o = gemm_helper.pv(p_carry_a, kv_lds_to_regs.load_v(pv_a_buf), v_o)
+                v_o = gemm_helper.pv(p_carry_b, kv_lds_to_regs.load_v(pv_b_buf), v_o)
+                v_o = softmax_helper.anchor_v_o(v_o)
+            else:
+                v_v_a = kv_lds_to_regs.load_v(a_buf)
+
+                # DMA pair {j+4,j+5} (2 pairs ahead) into the far ring buffers. Keep
+                # this last: hoisting it to the top of the body measured -1.5%, since
+                # the DMAs compete with the QK ds_reads for the same memory-issue slots.
+                if const_expr(not traits.BN128_STAGGER):
+                    kv_gmem_to_lds.load_k((j + fx.Index(4)) * BN, f_a_buf)
+                    kv_gmem_to_lds.load_k((j + fx.Index(5)) * BN, f_b_buf)
+                    kv_gmem_to_lds.load_v((j + fx.Index(4)) * BN, f_a_buf)
+                    kv_gmem_to_lds.load_v((j + fx.Index(5)) * BN, f_b_buf)
 
             m_tile = _merge_tile_max(v_s_a, v_s_b)
-            v_o, m_new, l_row = softmax_helper.lazy_correct_o(v_o, m_row, l_row, m_tile)
-            v_o = softmax_helper.anchor_v_o(v_o)
+            if const_expr(traits.BN128_NOBRANCH):
+                # Unconditional correction. The ballot-gated lazy version skips ~32
+                # VALU on the common path, but its scf.if splits the body into extra
+                # basic blocks, and the machine scheduler cannot move MFMAs across a
+                # block boundary -- which strands the QK MFMAs away from the softmax
+                # VALU they should be hiding behind.
+                m_new, corr = softmax_helper.rescale_from_tile_max(m_row, m_tile)
+                softmax_helper.scale_o(v_o, corr)
+                v_o = softmax_helper.anchor_v_o(v_o)
+                l_row = softmax_helper.apply_l_rescale(l_row, corr)
+            else:
+                v_o, m_new, l_row = softmax_helper.lazy_correct_o(v_o, m_row, l_row, m_tile)
+                v_o = softmax_helper.anchor_v_o(v_o)
 
-            v_o, l_row = _subtile_tail(v_s_a, v_v_a, v_o, l_row, m_new)
-            v_v_b = kv_lds_to_regs.load_v(b_buf)
-            v_o, l_row = _subtile_tail(v_s_b, v_v_b, v_o, l_row, m_new)
+            if const_expr(traits.BN128_PCARRY):
+                p_carry_a, l_row = _softmax_only(v_s_a, l_row, m_new)
+                p_carry_b, l_row = _softmax_only(v_s_b, l_row, m_new)
+            else:
+                v_o, l_row = _subtile_tail(v_s_a, v_v_a, v_o, l_row, m_new)
+                v_v_b = kv_lds_to_regs.load_v(b_buf)
+                v_o, l_row = _subtile_tail(v_s_b, v_v_b, v_o, l_row, m_new)
             m_row = m_new
 
             # The softmax/PV region holds exactly D_CHUNKS*2 = 8 wide fp8 MFMA (PV for
             # both sub-tiles). Asking for more MFMA groups than exist makes the
             # scheduler reserve slots for MFMAs that never arrive and leave the VALU
             # unpacked, so the two group counts must sum to 8.
-            _sched_barrier_exp_pairs(traits, traits.BN128_SCHED[0], traits.BN128_SCHED[1], 11)
-            _sched_barrier_pairs(traits, traits.BN128_SCHED[2], traits.BN128_SCHED[3], 11)
+            if const_expr(traits.BN128_PCARRY):
+                # Only the 8 PV MFMAs are free to move: the 8 QK ones feed the tile max
+                # that every exp2 depends on, so any pattern that asks for a QK MFMA
+                # between exps is unsatisfiable and the scheduler abandons the whole
+                # request. Pin QK as one leading block, then interleave PV with the exps.
+                n_qk = const_expr(traits.HEAD_DIM // 64 * 2 * 2)
+                n_pv = const_expr(traits.D_CHUNKS * 2)
+                rocdl.sched_group_barrier(traits.SCHED_MFMA_MASK, n_qk, 11)
+                for _ in range_constexpr(n_pv):
+                    rocdl.sched_group_barrier(traits.SCHED_MFMA_MASK, 1, 11)
+                    rocdl.sched_group_barrier(traits.SCHED_EXP_MASK, 64 // n_pv, 11)
+                    rocdl.sched_group_barrier(traits.SCHED_VALU_MASK, traits.BN128_SCHED[3], 11)
+            else:
+                _sched_barrier_exp_pairs(traits, traits.BN128_SCHED[0], traits.BN128_SCHED[1], 11)
+                _sched_barrier_pairs(traits, traits.BN128_SCHED[2], traits.BN128_SCHED[3], 11)
             if const_expr(traits.BN128_VMCNT >= 0):
                 # The {j+4, j+5} DMA issued above is not read until iteration j+4, two
                 # loop trips away, so draining it here (s_waitcnt 0) puts a full HBM
@@ -1119,11 +1188,20 @@ def build_flash_attn_dualwave_swp_fp8_module(
             rocdl.sched_barrier(0)
 
             # r_next == nn_a_buf ((r+2) mod NPF), already materialised above.
-            loop_results = yield [m_row, l_row] + v_o + [nn_a_buf]
+            tail_carry = [nn_a_buf, a_buf, p_carry_a, p_carry_b] if const_expr(traits.BN128_PCARRY) else [nn_a_buf]
+            loop_results = yield [m_row, l_row] + v_o + tail_carry
         # ---- Epilogue: all PV already accumulated in-loop; just normalize + store. ----
         m_row = loop_results[0]
         l_row = loop_results[1]
         v_o = [loop_results[2 + i] for i in range_constexpr(D_CHUNKS)]
+
+        if const_expr(traits.BN128_PCARRY):
+            # Drain the one pair of PV the loop still owes. Its V ring slots were not
+            # touched again: the last trip only wrote the pair two slots further on.
+            pv_a_buf = loop_results[3 + D_CHUNKS]
+            pv_b_buf = _ring_wrap(pv_a_buf + fx.Index(1))
+            v_o = gemm_helper.pv(loop_results[4 + D_CHUNKS], kv_lds_to_regs.load_v(pv_a_buf), v_o)
+            v_o = gemm_helper.pv(loop_results[5 + D_CHUNKS], kv_lds_to_regs.load_v(pv_b_buf), v_o)
 
         inv_l_rcp = rocdl.rcp(T.f32, _raw(l_row))
         inv_l = ArithValue(fx.Float32(l_row) > ctx.c_zero_f).select(inv_l_rcp, ctx.c_zero_f)
