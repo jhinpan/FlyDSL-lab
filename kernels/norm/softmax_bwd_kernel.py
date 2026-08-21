@@ -278,9 +278,12 @@ def build_softmax_bwd_module(N: int, dtype_str: str = "f32"):
         Y: fx.Tensor,
         DX: fx.Tensor,
         m_in: fx.Int32,
+        dot_dbg: fx.Tensor = None,
         stream: fx.Stream = fx.Stream(None),
     ):
-        launcher = softmax_bwd_kernel(DY, Y, DX)
+        if dot_dbg is None:
+            dot_dbg = DX
+        launcher = softmax_bwd_kernel(DY, Y, dot_dbg)
         launcher.launch(
             grid=(m_in, 1, 1),
             block=(BLOCK_THREADS, 1, 1),
