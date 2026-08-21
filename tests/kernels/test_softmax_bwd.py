@@ -272,5 +272,12 @@ def test_all():
         raise SystemExit(1)
 
 
+
+
+@pytest.mark.parametrize("M,N,dtype", ((512, 3000, "f32"), (256, 1023, "bf16")))
+def test_softmax_bwd_unaligned_shapes(M, N, dtype):
+    ok, _ = run_bwd_test(M, N, dtype)
+    assert ok, f"softmax backward mismatch for M={M}, N={N}, dtype={dtype}"
+
 if __name__ == "__main__":
     test_all()
