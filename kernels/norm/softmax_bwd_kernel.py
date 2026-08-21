@@ -76,6 +76,26 @@ def softmax_bwd_buffered_operands(N: int, dtype_str: str) -> int:
     return 0
 
 
+def softmax_bwd_operand_count(N: int, dtype_str: str) -> int:
+    """How many of (DY, Y) stay register-resident across the block reduction.
+
+    2 -> ideal 3-unit traffic; 1 -> DY re-read (4 units); 0 -> both re-read
+    (5 units), which is also what the generic scalar path does.
+
+    Exposed so the dispatch thresholds can be asserted without a GPU, mirroring
+    ``is_rmsnorm_bwd_two_stage_vec_config`` in ``rmsnorm_bwd_kernel.py``.
+    """
+    vec_width = 128 // (32 if dtype_str == "f32" else 16)
+    tile_cols = BLOCK_THREADS * vec_width
+    if N < tile_cols or N % tile_cols != 0:
+        return 0
+    if N <= MAX_RESIDENT_COLS:
+        return 2
+    if N <= 2 * MAX_RESIDENT_COLS:
+        return 1
+    return 0
+
+
 def build_softmax_bwd_module(N: int, dtype_str: str = "f32"):
     elem_bits = 32 if dtype_str == "f32" else 16
     # BufferCopy128b moves one 128-bit transaction per lane, so the register
