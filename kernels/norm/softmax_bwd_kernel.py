@@ -76,6 +76,19 @@ def softmax_bwd_buffered_operands(N: int, dtype_str: str) -> int:
     return 0
 
 
+
+# Tile selection table for softmax backward.
+_TILE_CONFIG = {
+    ('f32', 4096): (256, 2), ('f32', 8192): (256, 4), ('f32', 16384): (512, 4),
+    ('bf16', 4096): (256, 2), ('bf16', 8192): (512, 2), ('bf16', 16384): (512, 4),
+}
+
+def pick_tile(dtype_str, N):
+    for (dt, n), cfg in _TILE_CONFIG.items():
+        if dt == dtype_str and n >= N:
+            return cfg
+    return (BLOCK_THREADS, 2)
+
 def build_softmax_bwd_module(N: int, dtype_str: str = "f32"):
     elem_bits = 32 if dtype_str == "f32" else 16
     # BufferCopy128b moves one 128-bit transaction per lane, so the register
