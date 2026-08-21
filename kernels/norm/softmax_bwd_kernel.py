@@ -280,9 +280,10 @@ def build_softmax_bwd_module(N: int, dtype_str: str = "f32"):
         m_in: fx.Int32,
         stream: fx.Stream = fx.Stream(None),
     ):
+        n_rows = int(m_in) & 0xFFFFFFFF
         launcher = softmax_bwd_kernel(DY, Y, DX)
         launcher.launch(
-            grid=(m_in, 1, 1),
+            grid=(n_rows, 1, 1),
             block=(BLOCK_THREADS, 1, 1),
             stream=stream,
         )
