@@ -76,6 +76,7 @@ def softmax_bwd_buffered_operands(N: int, dtype_str: str) -> int:
     return 0
 
 
+# Builds the row-wise softmax backward module for a given N and dtype.
 def build_softmax_bwd_module(N: int, dtype_str: str = "f32"):
     elem_bits = 32 if dtype_str == "f32" else 16
     # BufferCopy128b moves one 128-bit transaction per lane, so the register
