@@ -1,0 +1,389 @@
+{
+  "shape": [
+    4096,
+    4096,
+    4096
+  ],
+  "user_kwargs": {
+    "use_half_tile_interleaved": false
+  },
+  "variants": {
+    "A": {
+      "variant": "A",
+      "fences": true,
+      "sched": true,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_pft_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 34,
+      "instructions": 1449,
+      "anchor_counts": {
+        "vmem_load": 16,
+        "barrier": 4,
+        "ds_read": 80,
+        "mfma": 128,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 0,
+      "s_waitcnt": 29,
+      "s_nop": 38,
+      "vgpr": 256,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 0,
+      "scratch_accesses": 0,
+      "anchor_order_sha": "31b02df1f08d",
+      "isa_text_sha": "2f749d40cbed"
+    },
+    "B": {
+      "variant": "B",
+      "fences": true,
+      "sched": false,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_pft_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 34,
+      "instructions": 1664,
+      "anchor_counts": {
+        "vmem_load": 16,
+        "barrier": 4,
+        "ds_read": 80,
+        "mfma": 128,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 0,
+      "s_waitcnt": 46,
+      "s_nop": 76,
+      "vgpr": 256,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 8,
+      "scratch_accesses": 2,
+      "anchor_order_sha": "c33941aee08d",
+      "isa_text_sha": "074c003cb6d6"
+    },
+    "C": {
+      "variant": "C",
+      "fences": false,
+      "sched": true,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_pft_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 0,
+      "instructions": 1445,
+      "anchor_counts": {
+        "vmem_load": 16,
+        "barrier": 4,
+        "ds_read": 80,
+        "mfma": 128,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 0,
+      "s_waitcnt": 36,
+      "s_nop": 41,
+      "vgpr": 256,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 20,
+      "scratch_accesses": 8,
+      "anchor_order_sha": "d11b9acf236f",
+      "isa_text_sha": "8148f4b26694"
+    },
+    "D": {
+      "variant": "D",
+      "fences": false,
+      "sched": false,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_pft_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 0,
+      "instructions": 1664,
+      "anchor_counts": {
+        "vmem_load": 16,
+        "barrier": 4,
+        "ds_read": 80,
+        "mfma": 128,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 0,
+      "s_waitcnt": 46,
+      "s_nop": 76,
+      "vgpr": 256,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 8,
+      "scratch_accesses": 2,
+      "anchor_order_sha": "c33941aee08d",
+      "isa_text_sha": "104aaa152c02"
+    }
+  },
+  "variant_vs_variant": [
+    {
+      "pair": "A vs D",
+      "order_equal": false,
+      "in_common_order": 326,
+      "total": 372,
+      "first_divergence": 33,
+      "edits": [
+        {
+          "op": "delete",
+          "at": 33,
+          "left": "2xds_read 8xmfma 10xds_read mfma 4xds_read",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 81,
+          "left": "",
+          "right": "9xmfma 16xds_read"
+        },
+        {
+          "op": "delete",
+          "at": 130,
+          "left": "10xds_read 2xmfma 6xds_read 2xmfma barrier",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 183,
+          "left": "",
+          "right": "16xds_read"
+        },
+        {
+          "op": "insert",
+          "at": 211,
+          "left": "",
+          "right": "4xmfma barrier"
+        }
+      ]
+    },
+    {
+      "pair": "B vs D",
+      "order_equal": true,
+      "in_common_order": 372,
+      "total": 372,
+      "first_divergence": null,
+      "edits": []
+    },
+    {
+      "pair": "A vs B",
+      "order_equal": false,
+      "in_common_order": 326,
+      "total": 372,
+      "first_divergence": 33,
+      "edits": [
+        {
+          "op": "delete",
+          "at": 33,
+          "left": "2xds_read 8xmfma 10xds_read mfma 4xds_read",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 81,
+          "left": "",
+          "right": "9xmfma 16xds_read"
+        },
+        {
+          "op": "delete",
+          "at": 130,
+          "left": "10xds_read 2xmfma 6xds_read 2xmfma barrier",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 183,
+          "left": "",
+          "right": "16xds_read"
+        },
+        {
+          "op": "insert",
+          "at": 211,
+          "left": "",
+          "right": "4xmfma barrier"
+        }
+      ]
+    },
+    {
+      "pair": "A vs C",
+      "order_equal": false,
+      "in_common_order": 349,
+      "total": 372,
+      "first_divergence": 35,
+      "edits": [
+        {
+          "op": "replace",
+          "at": 35,
+          "left": "8xmfma",
+          "right": "4xds_read"
+        },
+        {
+          "op": "replace",
+          "at": 54,
+          "left": "4xds_read",
+          "right": "8xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 132,
+          "left": "",
+          "right": "mfma 6xds_read mfma"
+        },
+        {
+          "op": "delete",
+          "at": 140,
+          "left": "2xmfma 6xds_read 2xmfma barrier",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 211,
+          "left": "",
+          "right": "2xmfma barrier"
+        }
+      ]
+    },
+    {
+      "pair": "C vs D",
+      "order_equal": false,
+      "in_common_order": 338,
+      "total": 372,
+      "first_divergence": 33,
+      "edits": [
+        {
+          "op": "delete",
+          "at": 17,
+          "left": "16xds_read",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 81,
+          "left": "",
+          "right": "16xds_read"
+        },
+        {
+          "op": "delete",
+          "at": 130,
+          "left": "2xds_read mfma 6xds_read mfma 8xds_read",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 178,
+          "left": "",
+          "right": "2xmfma 16xds_read"
+        }
+      ]
+    }
+  ],
+  "traced_ir_vs_isa": [
+    {
+      "pair": "traced IR vs A",
+      "order_equal": false,
+      "in_common_order": 326,
+      "total": 372,
+      "first_divergence": 33,
+      "edits": [
+        {
+          "op": "insert",
+          "at": 33,
+          "left": "",
+          "right": "2xds_read 8xmfma 10xds_read mfma 4xds_read"
+        },
+        {
+          "op": "delete",
+          "at": 56,
+          "left": "9xmfma 16xds_read",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 130,
+          "left": "",
+          "right": "10xds_read 2xmfma 6xds_read 2xmfma barrier"
+        },
+        {
+          "op": "delete",
+          "at": 162,
+          "left": "16xds_read",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 206,
+          "left": "4xmfma barrier",
+          "right": ""
+        }
+      ]
+    },
+    {
+      "pair": "traced IR vs B",
+      "order_equal": true,
+      "in_common_order": 372,
+      "total": 372,
+      "first_divergence": null,
+      "edits": []
+    },
+    {
+      "pair": "traced IR vs C",
+      "order_equal": false,
+      "in_common_order": 338,
+      "total": 372,
+      "first_divergence": 33,
+      "edits": [
+        {
+          "op": "insert",
+          "at": 17,
+          "left": "",
+          "right": "16xds_read"
+        },
+        {
+          "op": "delete",
+          "at": 65,
+          "left": "16xds_read",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 130,
+          "left": "",
+          "right": "2xds_read mfma 6xds_read mfma 8xds_read"
+        },
+        {
+          "op": "delete",
+          "at": 160,
+          "left": "2xmfma 16xds_read",
+          "right": ""
+        }
+      ]
+    },
+    {
+      "pair": "traced IR vs D",
+      "order_equal": true,
+      "in_common_order": 372,
+      "total": 372,
+      "first_divergence": null,
+      "edits": []
+    }
+  ],
+  "controls": {
+    "fences_removed": true,
+    "sched_flag_is_live": true,
+    "same_anchor_counts": true,
+    "ir_classifier_complete": true,
+    "same_traced_order": true
+  }
+}

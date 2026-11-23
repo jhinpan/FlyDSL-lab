@@ -1,0 +1,38 @@
+[
+  {
+    "dump": "A",
+    "code_object_bytes": 15864,
+    "text_bytes": 11840,
+    "code_object_equal": true,
+    "text_section_equal": true,
+    "differing_sections": [],
+    "control_mutation_differs": true
+  },
+  {
+    "dump": "B",
+    "code_object_bytes": 15864,
+    "text_bytes": 11840,
+    "code_object_equal": true,
+    "text_section_equal": true,
+    "differing_sections": [],
+    "control_mutation_differs": true
+  },
+  {
+    "dump": "C",
+    "code_object_bytes": 15800,
+    "text_bytes": 11776,
+    "code_object_equal": true,
+    "text_section_equal": true,
+    "differing_sections": [],
+    "control_mutation_differs": true
+  },
+  {
+    "dump": "D",
+    "code_object_bytes": 15864,
+    "text_bytes": 11840,
+    "code_object_equal": true,
+    "text_section_equal": true,
+    "differing_sections": [],
+    "control_mutation_differs": true
+  }
+]

@@ -1,0 +1,927 @@
+{
+  "shape": [
+    4096,
+    4096,
+    4096
+  ],
+  "user_kwargs": {},
+  "variants": {
+    "A": {
+      "variant": "A",
+      "fences": true,
+      "sched": true,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_phti_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 100,
+      "instructions": 1716,
+      "anchor_counts": {
+        "vmem_load": 32,
+        "barrier": 36,
+        "ds_read": 144,
+        "mfma": 256,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 9,
+      "s_waitcnt": 93,
+      "s_nop": 39,
+      "vgpr": 236,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 0,
+      "scratch_accesses": 0,
+      "anchor_order_sha": "20f0b7b19458",
+      "isa_text_sha": "56a117b11711"
+    },
+    "B": {
+      "variant": "B",
+      "fences": true,
+      "sched": false,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_phti_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 100,
+      "instructions": 1715,
+      "anchor_counts": {
+        "vmem_load": 32,
+        "barrier": 36,
+        "ds_read": 144,
+        "mfma": 256,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 9,
+      "s_waitcnt": 92,
+      "s_nop": 39,
+      "vgpr": 236,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 0,
+      "scratch_accesses": 0,
+      "anchor_order_sha": "cbd39d523976",
+      "isa_text_sha": "29f26be84657"
+    },
+    "C": {
+      "variant": "C",
+      "fences": false,
+      "sched": true,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_phti_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 0,
+      "instructions": 1692,
+      "anchor_counts": {
+        "vmem_load": 32,
+        "barrier": 36,
+        "ds_read": 144,
+        "mfma": 256,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 9,
+      "s_waitcnt": 77,
+      "s_nop": 19,
+      "vgpr": 256,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 32,
+      "scratch_accesses": 10,
+      "anchor_order_sha": "99101d31b9df",
+      "isa_text_sha": "abe9667e5586"
+    },
+    "D": {
+      "variant": "D",
+      "fences": false,
+      "sched": false,
+      "kernel": "hgemm_bf16_t256x256x64x2_ks1_w2x4x1_gm0_bias0_lnn_phti_0",
+      "versions": {
+        "flydsl": "0.5.2",
+        "torch": "2.15.0+cpu"
+      },
+      "traced_sched_barriers": 0,
+      "instructions": 1717,
+      "anchor_counts": {
+        "vmem_load": 32,
+        "barrier": 36,
+        "ds_read": 144,
+        "mfma": 256,
+        "ds_write": 128,
+        "vmem_store": 16
+      },
+      "authored_s_waitcnt": 9,
+      "s_waitcnt": 92,
+      "s_nop": 41,
+      "vgpr": 236,
+      "sgpr": 96,
+      "lds_bytes": 131072,
+      "scratch_bytes": 0,
+      "scratch_accesses": 0,
+      "anchor_order_sha": "cbd39d523976",
+      "isa_text_sha": "29a5b9ea6dda"
+    }
+  },
+  "variant_vs_variant": [
+    {
+      "pair": "A vs D",
+      "order_equal": false,
+      "in_common_order": 571,
+      "total": 612,
+      "first_divergence": 416,
+      "edits": [
+        {
+          "op": "delete",
+          "at": 416,
+          "left": "6xmfma 5xds_write mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 437,
+          "left": "mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 447,
+          "left": "mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 454,
+          "left": "3xds_write 7xmfma barrier mfma",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 483,
+          "left": "",
+          "right": "7xmfma barrier 23xds_write"
+        },
+        {
+          "op": "delete",
+          "at": 493,
+          "left": "9xds_write",
+          "right": ""
+        },
+        {
+          "op": "replace",
+          "at": 503,
+          "left": "6xds_write",
+          "right": "10xmfma"
+        }
+      ]
+    },
+    {
+      "pair": "B vs D",
+      "order_equal": true,
+      "in_common_order": 612,
+      "total": 612,
+      "first_divergence": null,
+      "edits": []
+    },
+    {
+      "pair": "A vs B",
+      "order_equal": false,
+      "in_common_order": 571,
+      "total": 612,
+      "first_divergence": 416,
+      "edits": [
+        {
+          "op": "delete",
+          "at": 416,
+          "left": "6xmfma 5xds_write mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 437,
+          "left": "mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 447,
+          "left": "mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 454,
+          "left": "3xds_write 7xmfma barrier mfma",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 483,
+          "left": "",
+          "right": "7xmfma barrier 23xds_write"
+        },
+        {
+          "op": "delete",
+          "at": 493,
+          "left": "9xds_write",
+          "right": ""
+        },
+        {
+          "op": "replace",
+          "at": 503,
+          "left": "6xds_write",
+          "right": "10xmfma"
+        }
+      ]
+    },
+    {
+      "pair": "A vs C",
+      "order_equal": false,
+      "in_common_order": 388,
+      "total": 612,
+      "first_divergence": 36,
+      "edits": [
+        {
+          "op": "delete",
+          "at": 36,
+          "left": "16xmfma",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 61,
+          "left": "",
+          "right": "2xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 62,
+          "left": "",
+          "right": "2xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 63,
+          "left": "",
+          "right": "barrier"
+        },
+        {
+          "op": "replace",
+          "at": 80,
+          "left": "barrier",
+          "right": "12xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 90,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "insert",
+          "at": 91,
+          "left": "",
+          "right": "mfma barrier"
+        },
+        {
+          "op": "insert",
+          "at": 108,
+          "left": "",
+          "right": "6xmfma 8xds_read vmem_load mfma vmem_load barrier mfma barrier 6xmfma 8xds_read vmem_load mfma vmem_load barrier"
+        },
+        {
+          "op": "insert",
+          "at": 118,
+          "left": "",
+          "right": "2xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 119,
+          "left": "",
+          "right": "mfma barrier"
+        },
+        {
+          "op": "replace",
+          "at": 136,
+          "left": "barrier",
+          "right": "12xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 146,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "insert",
+          "at": 147,
+          "left": "",
+          "right": "2xbarrier vmem_load mfma vmem_load barrier mfma"
+        },
+        {
+          "op": "replace",
+          "at": 164,
+          "left": "barrier",
+          "right": "13xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 173,
+          "left": "",
+          "right": "6xds_read mfma ds_read mfma ds_read 4xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 175,
+          "left": "",
+          "right": "mfma 2xbarrier 5xds_read mfma ds_read mfma ds_read 2xmfma ds_read mfma 2xbarrier 2xds_read 3xmfma 4xds_read 6xmfma 2xds_read barrier"
+        },
+        {
+          "op": "insert",
+          "at": 192,
+          "left": "",
+          "right": "3xmfma 4xds_read 4xmfma 4xds_read 6xmfma 2xbarrier 2xmfma 2xds_read mfma 2xds_read 3xmfma 4xds_read barrier mfma"
+        },
+        {
+          "op": "insert",
+          "at": 197,
+          "left": "",
+          "right": "8xmfma"
+        },
+        {
+          "op": "replace",
+          "at": 201,
+          "left": "2xvmem_load",
+          "right": "barrier mfma"
+        },
+        {
+          "op": "delete",
+          "at": 220,
+          "left": "barrier 2xvmem_load barrier",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 229,
+          "left": "11xmfma barrier",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 243,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "delete",
+          "at": 245,
+          "left": "12xds_read 2xvmem_load barrier",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 261,
+          "left": "15xmfma barrier 4xds_read",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 286,
+          "left": "16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 6xmfma",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 447,
+          "left": "",
+          "right": "9xds_write barrier mfma"
+        },
+        {
+          "op": "replace",
+          "at": 450,
+          "left": "ds_write",
+          "right": "5xmfma"
+        },
+        {
+          "op": "replace",
+          "at": 462,
+          "left": "2xmfma barrier",
+          "right": "3xds_write"
+        },
+        {
+          "op": "replace",
+          "at": 469,
+          "left": "5xds_write",
+          "right": "7xmfma"
+        },
+        {
+          "op": "replace",
+          "at": 503,
+          "left": "6xds_write",
+          "right": "barrier"
+        },
+        {
+          "op": "replace",
+          "at": 513,
+          "left": "barrier",
+          "right": "2xmfma"
+        }
+      ]
+    },
+    {
+      "pair": "C vs D",
+      "order_equal": false,
+      "in_common_order": 376,
+      "total": 612,
+      "first_divergence": 36,
+      "edits": [
+        {
+          "op": "insert",
+          "at": 36,
+          "left": "",
+          "right": "16xmfma"
+        },
+        {
+          "op": "delete",
+          "at": 45,
+          "left": "2xmfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 48,
+          "left": "2xmfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 51,
+          "left": "barrier",
+          "right": ""
+        },
+        {
+          "op": "replace",
+          "at": 69,
+          "left": "12xmfma",
+          "right": "barrier"
+        },
+        {
+          "op": "delete",
+          "at": 90,
+          "left": "mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 92,
+          "left": "mfma barrier",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 111,
+          "left": "6xmfma 8xds_read vmem_load mfma vmem_load barrier mfma barrier 6xmfma 8xds_read vmem_load mfma vmem_load barrier",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 159,
+          "left": "2xmfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 162,
+          "left": "mfma barrier",
+          "right": ""
+        },
+        {
+          "op": "replace",
+          "at": 181,
+          "left": "12xmfma",
+          "right": "barrier"
+        },
+        {
+          "op": "delete",
+          "at": 202,
+          "left": "mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 204,
+          "left": "2xbarrier vmem_load mfma vmem_load barrier mfma",
+          "right": ""
+        },
+        {
+          "op": "replace",
+          "at": 228,
+          "left": "13xmfma",
+          "right": "barrier"
+        },
+        {
+          "op": "delete",
+          "at": 249,
+          "left": "6xds_read mfma ds_read mfma ds_read 4xmfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 265,
+          "left": "mfma 2xbarrier 5xds_read mfma ds_read mfma ds_read 2xmfma ds_read mfma 2xbarrier 2xds_read 3xmfma 4xds_read 6xmfma 2xds_read barrier",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 318,
+          "left": "3xmfma 4xds_read 4xmfma 4xds_read 6xmfma 2xbarrier 2xmfma 2xds_read mfma 2xds_read 3xmfma 4xds_read barrier mfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 362,
+          "left": "8xmfma",
+          "right": ""
+        },
+        {
+          "op": "replace",
+          "at": 374,
+          "left": "barrier mfma",
+          "right": "2xvmem_load"
+        },
+        {
+          "op": "insert",
+          "at": 393,
+          "left": "",
+          "right": "barrier 2xvmem_load barrier"
+        },
+        {
+          "op": "insert",
+          "at": 398,
+          "left": "",
+          "right": "11xmfma barrier"
+        },
+        {
+          "op": "delete",
+          "at": 400,
+          "left": "mfma",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 403,
+          "left": "",
+          "right": "12xds_read 2xvmem_load barrier"
+        },
+        {
+          "op": "insert",
+          "at": 404,
+          "left": "",
+          "right": "15xmfma barrier 4xds_read"
+        },
+        {
+          "op": "delete",
+          "at": 409,
+          "left": "5xds_write",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 415,
+          "left": "9xds_write",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 425,
+          "left": "",
+          "right": "14xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier"
+        },
+        {
+          "op": "delete",
+          "at": 443,
+          "left": "barrier 2xmfma 2xds_write 5xmfma",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 459,
+          "left": "5xmfma",
+          "right": ""
+        },
+        {
+          "op": "replace",
+          "at": 467,
+          "left": "mfma",
+          "right": "2xds_write"
+        },
+        {
+          "op": "insert",
+          "at": 487,
+          "left": "",
+          "right": "barrier 23xds_write"
+        },
+        {
+          "op": "delete",
+          "at": 497,
+          "left": "9xds_write mfma barrier",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 514,
+          "left": "",
+          "right": "9xmfma barrier"
+        }
+      ]
+    }
+  ],
+  "traced_ir_vs_isa": [
+    {
+      "pair": "traced IR vs A",
+      "order_equal": false,
+      "in_common_order": 571,
+      "total": 612,
+      "first_divergence": 416,
+      "edits": [
+        {
+          "op": "insert",
+          "at": 416,
+          "left": "",
+          "right": "6xmfma 5xds_write mfma"
+        },
+        {
+          "op": "insert",
+          "at": 425,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "insert",
+          "at": 434,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "insert",
+          "at": 440,
+          "left": "",
+          "right": "3xds_write 7xmfma barrier mfma"
+        },
+        {
+          "op": "delete",
+          "at": 457,
+          "left": "7xmfma barrier 23xds_write",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 498,
+          "left": "",
+          "right": "9xds_write"
+        },
+        {
+          "op": "replace",
+          "at": 499,
+          "left": "10xmfma",
+          "right": "6xds_write"
+        }
+      ]
+    },
+    {
+      "pair": "traced IR vs B",
+      "order_equal": true,
+      "in_common_order": 612,
+      "total": 612,
+      "first_divergence": null,
+      "edits": []
+    },
+    {
+      "pair": "traced IR vs C",
+      "order_equal": false,
+      "in_common_order": 376,
+      "total": 612,
+      "first_divergence": 36,
+      "edits": [
+        {
+          "op": "delete",
+          "at": 36,
+          "left": "16xmfma",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 61,
+          "left": "",
+          "right": "2xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 62,
+          "left": "",
+          "right": "2xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 63,
+          "left": "",
+          "right": "barrier"
+        },
+        {
+          "op": "replace",
+          "at": 80,
+          "left": "barrier",
+          "right": "12xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 90,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "insert",
+          "at": 91,
+          "left": "",
+          "right": "mfma barrier"
+        },
+        {
+          "op": "insert",
+          "at": 108,
+          "left": "",
+          "right": "6xmfma 8xds_read vmem_load mfma vmem_load barrier mfma barrier 6xmfma 8xds_read vmem_load mfma vmem_load barrier"
+        },
+        {
+          "op": "insert",
+          "at": 118,
+          "left": "",
+          "right": "2xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 119,
+          "left": "",
+          "right": "mfma barrier"
+        },
+        {
+          "op": "replace",
+          "at": 136,
+          "left": "barrier",
+          "right": "12xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 146,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "insert",
+          "at": 147,
+          "left": "",
+          "right": "2xbarrier vmem_load mfma vmem_load barrier mfma"
+        },
+        {
+          "op": "replace",
+          "at": 164,
+          "left": "barrier",
+          "right": "13xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 173,
+          "left": "",
+          "right": "6xds_read mfma ds_read mfma ds_read 4xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 175,
+          "left": "",
+          "right": "mfma 2xbarrier 5xds_read mfma ds_read mfma ds_read 2xmfma ds_read mfma 2xbarrier 2xds_read 3xmfma 4xds_read 6xmfma 2xds_read barrier"
+        },
+        {
+          "op": "insert",
+          "at": 192,
+          "left": "",
+          "right": "3xmfma 4xds_read 4xmfma 4xds_read 6xmfma 2xbarrier 2xmfma 2xds_read mfma 2xds_read 3xmfma 4xds_read barrier mfma"
+        },
+        {
+          "op": "insert",
+          "at": 197,
+          "left": "",
+          "right": "8xmfma"
+        },
+        {
+          "op": "replace",
+          "at": 201,
+          "left": "2xvmem_load",
+          "right": "barrier mfma"
+        },
+        {
+          "op": "delete",
+          "at": 220,
+          "left": "barrier 2xvmem_load barrier",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 229,
+          "left": "11xmfma barrier",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 243,
+          "left": "",
+          "right": "mfma"
+        },
+        {
+          "op": "delete",
+          "at": 245,
+          "left": "12xds_read 2xvmem_load barrier",
+          "right": ""
+        },
+        {
+          "op": "delete",
+          "at": 261,
+          "left": "15xmfma barrier 4xds_read",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 286,
+          "left": "",
+          "right": "5xds_write"
+        },
+        {
+          "op": "insert",
+          "at": 287,
+          "left": "",
+          "right": "9xds_write"
+        },
+        {
+          "op": "delete",
+          "at": 288,
+          "left": "14xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier 16xmfma barrier 8xds_read barrier",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 434,
+          "left": "",
+          "right": "barrier 2xmfma 2xds_write 5xmfma"
+        },
+        {
+          "op": "insert",
+          "at": 440,
+          "left": "",
+          "right": "5xmfma"
+        },
+        {
+          "op": "replace",
+          "at": 443,
+          "left": "2xds_write",
+          "right": "mfma"
+        },
+        {
+          "op": "delete",
+          "at": 464,
+          "left": "barrier 23xds_write",
+          "right": ""
+        },
+        {
+          "op": "insert",
+          "at": 498,
+          "left": "",
+          "right": "9xds_write mfma barrier"
+        },
+        {
+          "op": "delete",
+          "at": 504,
+          "left": "9xmfma barrier",
+          "right": ""
+        }
+      ]
+    },
+    {
+      "pair": "traced IR vs D",
+      "order_equal": true,
+      "in_common_order": 612,
+      "total": 612,
+      "first_divergence": null,
+      "edits": []
+    }
+  ],
+  "controls": {
+    "fences_removed": true,
+    "sched_flag_is_live": true,
+    "same_anchor_counts": true,
+    "ir_classifier_complete": true,
+    "same_traced_order": true
+  }
+}
